@@ -10,7 +10,41 @@ dnf -qy versionlock clear
 # Install Anaconda
 dnf install -qy --enable-repo=fedora-cisco-openh264 --allowerasing firefox anaconda-live libblockdev-{btrfs,lvm,dm}
 
+# Patch blivet in installer runtime so generated install.img includes the fix
+if ! command -v patch >/dev/null 2>&1; then
+    dnf install -qy patch
+fi
+BLIVET_PKG_DIR="$(python3 - <<'PY'
+import inspect
+import os
+import blivet
+print(os.path.dirname(inspect.getfile(blivet)))
+PY
+)"
+PATCH_FILE="/src/installer/patches/blivet-loop-partition.patch"
+if [[ ! -f "$PATCH_FILE" ]]; then
+    echo "::error::blivet patch file not found: $PATCH_FILE"
+    exit 1
+fi
+
+BLIVET_PARENT_DIR="$(dirname "$BLIVET_PKG_DIR")"
+
+
+echo "::group::Apply blivet patch"
+if ! patch --verbose -d "$BLIVET_PARENT_DIR" -p1 < "$PATCH_FILE"; then
+    echo "::error::Failed to apply $PATCH_FILE"
+    echo "blivet dir: $BLIVET_PKG_DIR"
+    echo "--- patch dry-run diagnostics ---"
+    patch --dry-run --verbose -d "$BLIVET_PARENT_DIR" -p1 < "$PATCH_FILE" || true
+    exit 1
+fi
+echo "::endgroup::"
+
+python3 -m compileall -q "$BLIVET_PKG_DIR" || :
+
+
 mkdir -p /var/lib/rpm-state # Needed for Anaconda Web UI
+
 
 # Utilities for displaying a dialog prompting users to review secure boot documentation
 dnf install -qy --setopt=install_weak_deps=0 qrencode yad

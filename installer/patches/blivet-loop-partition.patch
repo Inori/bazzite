@@ -1,0 +1,54 @@
+diff --git a/blivet/devices/loop.py b/blivet/devices/loop.py
+index 392a8b1..18ceb59 100644
+--- a/blivet/devices/loop.py
++++ b/blivet/devices/loop.py
+@@ -38,8 +38,15 @@ from .storage import StorageDevice
+ 
+ class LoopDevice(StorageDevice):
+ 
+-    """ A loop device. """
++    """ A loop device.
++
++    Treated as a partitionable disk so that partition devices like
++    loopNp1/loopNp2 can be represented as normal PartitionDevice
++    instances (useful for loop-backed disk images).
++    """
+     _type = "loop"
++    _partitionable = True
++    _is_disk = True
+     _external_dependencies = [availability.BLOCKDEV_LOOP_PLUGIN]
+ 
+     def __init__(self, name=None, fmt=None, size=None, sysfs_path=None,
+diff --git a/blivet/populator/helpers/loop.py b/blivet/populator/helpers/loop.py
+index 956b0a5..011a8ed 100644
+--- a/blivet/populator/helpers/loop.py
++++ b/blivet/populator/helpers/loop.py
+@@ -33,7 +33,12 @@ from .devicepopulator import DevicePopulator
+ class LoopDevicePopulator(DevicePopulator):
+     @classmethod
+     def match(cls, data):
+-        return udev.device_is_loop(data)
++        """Match only whole loop devices, not their partitions.
++
++        For example, match "loop2", but let PartitionDevicePopulator
++        handle "loop2p1" etc.
++        """
++        return udev.device_is_loop(data) and not udev.device_is_partition(data)
+ 
+     def run(self):
+         name = udev.device_get_name(self.data)
+diff --git a/blivet/populator/helpers/partition.py b/blivet/populator/helpers/partition.py
+index 9db6ab6..0762cc1 100644
+--- a/blivet/populator/helpers/partition.py
++++ b/blivet/populator/helpers/partition.py
+@@ -66,6 +66,10 @@ class PartitionDevicePopulator(DevicePopulator):
+             log.error("failure finding disk for %s", name)
+             return
+ 
++        log.debug("PartitionDevicePopulator: parent disk %s, partitionable=%s, partitioned=%s, fmt=%s, fmt_supported=%s",
++                  disk.name, disk.partitionable, disk.partitioned,
++                  getattr(disk.format, "type", None), getattr(disk.format, "supported", None))
++
+         if not disk.partitioned or not disk.format.supported:
+             # Ignore partitions on:
+             #  - devices we do not support partitioning of, like logical volumes
