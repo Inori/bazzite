@@ -22,9 +22,33 @@ dnf -y --repo fedora,updates --setopt=tsflags=noscripts install kernel kernel-co
 kernel=$(find /usr/lib/modules -maxdepth 1 -type d -printf '%P\n' | grep .)
 depmod "$kernel"
 
+mkdir -p /usr/sbin /etc/modules-load.d /etc/dracut.conf.d
+cat >/usr/sbin/mount.ntfs <<'EOF'
+#!/bin/sh
+# Try to locate a usable mount binary.
+if command -v mount >/dev/null 2>&1; then
+    MNT="$(command -v mount)"
+elif [ -x /usr/bin/mount ]; then
+    MNT="/usr/bin/mount"
+elif [ -x /bin/mount ]; then
+    MNT="/bin/mount"
+else
+    MNT="mount"
+fi
+exec "$MNT" -t ntfs3 "$@"
+EOF
+
+chmod 0755 /usr/sbin/mount.ntfs
+printf "ntfs3\nloop\niso9660\nsr_mod\n" >/etc/modules-load.d/early.conf
+cat >/etc/dracut.conf.d/10-bazzite-installer-ntfs3.conf <<'EOF'
+add_drivers+=" ntfs3 loop iso9660 sr_mod "
+install_items+=" /usr/sbin/mount.ntfs /etc/modules-load.d/early.conf "
+EOF
+
 imageref="$(podman images --format '{{ index .Names 0 }}\n' 'bazzite*' | head -1)"
 imageref="${imageref##*://}"
 imageref="${imageref%%:*}"
+
 
 # Include nvidia-gpu-firmware package.
 dnf install -yq nvidia-gpu-firmware || :
