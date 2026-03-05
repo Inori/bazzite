@@ -1,0 +1,111 @@
+<%page args="root"/>
+<%
+import os
+import subprocess
+import glob
+import shutil
+
+# ==============================================================================
+# PART 1: 准备 Initrd 需要的文件 (NTFS3 支持)
+# 这些文件首先写入到 root (即 install.img 的内容)，
+# 然后通过 dracut 配置指示 Dracut 将它们包含进 initrd.img。
+# ==============================================================================
+
+# 1.1 创建 mount.ntfs 包装脚本
+# ------------------------------------------------------------------------------
+# 放到 /usr/sbin/mount.ntfs (Fedora 中 /sbin -> /usr/sbin)
+mount_ntfs_path = os.path.join(root, "usr/sbin/mount.ntfs")
+# 确保父目录存在
+if not os.path.exists(os.path.dirname(mount_ntfs_path)):
+    os.makedirs(os.path.dirname(mount_ntfs_path))
+
+mount_ntfs_content = """#!/bin/sh
+# Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.
+# Try to locate a usable mount binary.
+if command -v mount >/dev/null 2>&1; then
+  MNT="$(command -v mount)"
+elif [ -x /usr/bin/mount ]; then
+  MNT="/usr/bin/mount"
+elif [ -x /bin/mount ]; then
+  MNT="/bin/mount"
+else
+  # Fallback: hope PATH resolves it
+  MNT="mount"
+fi
+exec "$MNT" -t ntfs3 "$@"
+"""
+
+with open(mount_ntfs_path, "w") as f:
+    f.write(mount_ntfs_content)
+os.chmod(mount_ntfs_path, 0o755)
+
+# 1.2 创建 modules-load.d 配置 (强制加载模块)
+# ------------------------------------------------------------------------------
+modules_conf_path = os.path.join(root, "etc/modules-load.d/10-bazzite-ntfs3.conf")
+if not os.path.exists(os.path.dirname(modules_conf_path)):
+    os.makedirs(os.path.dirname(modules_conf_path))
+
+with open(modules_conf_path, "w") as f:
+    f.write("ntfs3\nloop\niso9660\nsr_mod\n")
+
+# 1.3 配置 Dracut
+# ------------------------------------------------------------------------------
+# 这一步是连接 Install.img 和 Initrd.img 的桥梁。
+# 我们在 root 下放置这个配置，稍后运行的 dracut 进程会读取它。
+dracut_conf_path = os.path.join(root, "etc/dracut.conf.d/10-bazzite-installer-ntfs3.conf")
+if not os.path.exists(os.path.dirname(dracut_conf_path)):
+    os.makedirs(os.path.dirname(dracut_conf_path))
+
+with open(dracut_conf_path, "w") as f:
+    # 1. 确保内核模块被包含
+    f.write('add_drivers+=" ntfs3 loop iso9660 sr_mod "\n')
+    # 2. 确保我们将要用到的自定义文件被包含进 initrd
+    f.write('install_items+=" /usr/sbin/mount.ntfs /etc/modules-load.d/10-bazzite-ntfs3.conf "\n')
+
+
+# ==============================================================================
+# PART 2: 修改 Install.img (修复 Blivet Loop 设备处理)
+# 直接修改 root 目录下的 Python 代码，这些修改会保留在最终的 install.img 中。
+# ==============================================================================
+
+# 2.1 查找 Blivet 目录
+# ------------------------------------------------------------------------------
+# Blivet 通常位于 /usr/lib/pythonX.Y/site-packages/blivet
+blivet_root = None
+site_packages = glob.glob(os.path.join(root, "usr/lib/python*/site-packages"))
+for sp in site_packages:
+    if os.path.exists(os.path.join(sp, "blivet")):
+        blivet_root = sp
+        break
+
+if blivet_root:
+    print(f"Found blivet at {blivet_root}")
+    
+    # 2.2 准备 Patch 文件
+    # ------------------------------------------------------------------------------
+    # 外部 patch 文件路径 (在容器内的路径)
+    # 注意：github workspace 被挂载到了 /github/workspace
+    external_patch_path = "/github/workspace/installer/patches/blivet-loop-partition.patch"
+    
+    if not os.path.exists(external_patch_path):
+        print(f"::error:: Patch file not found at {external_patch_path}")
+        # 如果 patch 文件不存在，这是一个严重错误
+        raise FileNotFoundError(f"Patch file not found: {external_patch_path}")
+        
+    try:
+        # 使用系统 patch 命令应用补丁
+        # -d 指定工作目录 (site-packages)，-p1 去掉 patch 路径中的第一层 (a/blivet -> blivet)
+        print(f"Applying patch {external_patch_path} to {blivet_root}")
+        subprocess.check_call(["patch", "-d", blivet_root, "-p1", "-i", external_patch_path])
+        print("Blivet patch applied successfully.")
+        
+        # 重新编译 python 字节码，防止 .pyc 和 .py 不一致
+        subprocess.check_call(["python3", "-m", "compileall", "-q", os.path.join(blivet_root, "blivet")])
+        
+    except Exception as e:
+        print(f"Failed to apply blivet patch: {e}")
+        # 如果 patch 失败，这是一个严重错误，应该中断构建
+        raise e
+else:
+    print("::warning:: Blivet not found in image root, skipping patch. This might be unexpected.")
+%>
