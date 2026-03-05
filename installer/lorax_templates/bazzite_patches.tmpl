@@ -1,111 +1,102 @@
 <%page args="root"/>
 <%
 import os
-import subprocess
-import glob
 import shutil
+import glob
 
 # ==============================================================================
 # PART 1: 准备 Initrd 需要的文件 (NTFS3 支持)
-# 这些文件首先写入到 root (即 install.img 的内容)，
-# 然后通过 dracut 配置指示 Dracut 将它们包含进 initrd.img。
 # ==============================================================================
 
-# 1.1 创建 mount.ntfs 包装脚本
-# ------------------------------------------------------------------------------
-# 放到 /usr/sbin/mount.ntfs (Fedora 中 /sbin -> /usr/sbin)
-mount_ntfs_path = os.path.join(root, "usr/sbin/mount.ntfs")
-# 确保父目录存在
-if not os.path.exists(os.path.dirname(mount_ntfs_path)):
-    os.makedirs(os.path.dirname(mount_ntfs_path))
-
+# 1. 创建 mount.ntfs 脚本 (NTFS3 Wrapper)
 mount_ntfs_content = """#!/bin/sh
-# Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.
 # Try to locate a usable mount binary.
 if command -v mount >/dev/null 2>&1; then
-  MNT="$(command -v mount)"
+    MNT="$(command -v mount)"
 elif [ -x /usr/bin/mount ]; then
-  MNT="/usr/bin/mount"
+    MNT="/usr/bin/mount"
 elif [ -x /bin/mount ]; then
-  MNT="/bin/mount"
+    MNT="/bin/mount"
 else
-  # Fallback: hope PATH resolves it
-  MNT="mount"
+    MNT="mount"
 fi
 exec "$MNT" -t ntfs3 "$@"
 """
 
-with open(mount_ntfs_path, "w") as f:
+# 写入 /usr/sbin/mount.ntfs
+sbin_path = os.path.join(root, "usr/sbin/mount.ntfs")
+if not os.path.exists(os.path.dirname(sbin_path)):
+    os.makedirs(os.path.dirname(sbin_path))
+
+with open(sbin_path, "w") as f:
     f.write(mount_ntfs_content)
-os.chmod(mount_ntfs_path, 0o755)
+os.chmod(sbin_path, 0o755)
 
-# 1.2 创建 modules-load.d 配置 (强制加载模块)
-# ------------------------------------------------------------------------------
-modules_conf_path = os.path.join(root, "etc/modules-load.d/10-bazzite-ntfs3.conf")
-if not os.path.exists(os.path.dirname(modules_conf_path)):
-    os.makedirs(os.path.dirname(modules_conf_path))
+# 2. 创建 modules-load 配置
+mod_conf_path = os.path.join(root, "etc/modules-load.d/10-bazzite-ntfs3.conf")
+if not os.path.exists(os.path.dirname(mod_conf_path)):
+    os.makedirs(os.path.dirname(mod_conf_path))
 
-with open(modules_conf_path, "w") as f:
+with open(mod_conf_path, "w") as f:
     f.write("ntfs3\nloop\niso9660\nsr_mod\n")
 
-# 1.3 配置 Dracut
-# ------------------------------------------------------------------------------
-# 这一步是连接 Install.img 和 Initrd.img 的桥梁。
-# 我们在 root 下放置这个配置，稍后运行的 dracut 进程会读取它。
+# 3. 创建 Dracut 配置 (让 dracut 把上述文件吸入 initrd)
 dracut_conf_path = os.path.join(root, "etc/dracut.conf.d/10-bazzite-installer-ntfs3.conf")
 if not os.path.exists(os.path.dirname(dracut_conf_path)):
     os.makedirs(os.path.dirname(dracut_conf_path))
 
 with open(dracut_conf_path, "w") as f:
-    # 1. 确保内核模块被包含
     f.write('add_drivers+=" ntfs3 loop iso9660 sr_mod "\n')
-    # 2. 确保我们将要用到的自定义文件被包含进 initrd
     f.write('install_items+=" /usr/sbin/mount.ntfs /etc/modules-load.d/10-bazzite-ntfs3.conf "\n')
 
 
 # ==============================================================================
-# PART 2: 修改 Install.img (修复 Blivet Loop 设备处理)
-# 直接修改 root 目录下的 Python 代码，这些修改会保留在最终的 install.img 中。
+# PART 2: 准备 Blivet Patch (复制 Patch 文件)
 # ==============================================================================
 
-# 2.1 查找 Blivet 目录
-# ------------------------------------------------------------------------------
-# Blivet 通常位于 /usr/lib/pythonX.Y/site-packages/blivet
-blivet_root = None
-site_packages = glob.glob(os.path.join(root, "usr/lib/python*/site-packages"))
-for sp in site_packages:
-    if os.path.exists(os.path.join(sp, "blivet")):
-        blivet_root = sp
-        break
+# 复制 workspace 中的 patch 文件到 chroot 的 /tmp 目录
+workspace_patch = "/github/workspace/installer/patches/blivet-loop-partition.patch"
+dest_patch = os.path.join(root, "tmp/blivet.patch")
 
-if blivet_root:
-    print(f"Found blivet at {blivet_root}")
-    
-    # 2.2 准备 Patch 文件
-    # ------------------------------------------------------------------------------
-    # 外部 patch 文件路径 (在容器内的路径)
-    # 注意：github workspace 被挂载到了 /github/workspace
-    external_patch_path = "/github/workspace/installer/patches/blivet-loop-partition.patch"
-    
-    if not os.path.exists(external_patch_path):
-        print(f"::error:: Patch file not found at {external_patch_path}")
-        # 如果 patch 文件不存在，这是一个严重错误
-        raise FileNotFoundError(f"Patch file not found: {external_patch_path}")
-        
-    try:
-        # 使用系统 patch 命令应用补丁
-        # -d 指定工作目录 (site-packages)，-p1 去掉 patch 路径中的第一层 (a/blivet -> blivet)
-        print(f"Applying patch {external_patch_path} to {blivet_root}")
-        subprocess.check_call(["patch", "-d", blivet_root, "-p1", "-i", external_patch_path])
-        print("Blivet patch applied successfully.")
-        
-        # 重新编译 python 字节码，防止 .pyc 和 .py 不一致
-        subprocess.check_call(["python3", "-m", "compileall", "-q", os.path.join(blivet_root, "blivet")])
-        
-    except Exception as e:
-        print(f"Failed to apply blivet patch: {e}")
-        # 如果 patch 失败，这是一个严重错误，应该中断构建
-        raise e
+if not os.path.exists(os.path.dirname(dest_patch)):
+    os.makedirs(os.path.dirname(dest_patch))
+
+# 检查源文件是否存在
+if os.path.exists(workspace_patch):
+    shutil.copy(workspace_patch, dest_patch)
 else:
-    print("::warning:: Blivet not found in image root, skipping patch. This might be unexpected.")
+    print(f"WARNING: Patch file not found at {workspace_patch}")
+
+# 动态查找 site-packages 路径 (兼容不同 Python 版本)
+site_packages_glob = os.path.join(root, "usr/lib/python3.*/site-packages")
+found_dirs = glob.glob(site_packages_glob)
+if found_dirs:
+    # 取第一个找到的路径
+    full_path = found_dirs[0]
+    # 计算相对路径，例如 usr/lib/python3.12/site-packages
+    rel_path = os.path.relpath(full_path, root)
+    # 转为绝对路径用于 runcmd
+    target_site_packages = "/" + rel_path
+else:
+    # Fallback
+    target_site_packages = "/usr/lib/python3.14/site-packages"
+
 %>
+
+## ==============================================================================
+## PART 3: Lorax 指令 (在 chroot 环境执行)
+## ==============================================================================
+
+# 1. 安装 patch 工具
+installpkg patch
+
+# 2. 应用 Patch
+runcmd patch -d ${target_site_packages} -p1 < /tmp/blivet.patch
+
+# 3. 重新编译 Python 字节码
+runcmd python3 -m compileall -q ${target_site_packages}/blivet
+
+# 4. 清理 (卸载 patch，删除临时文件)
+# 注意：使用 rpm -e 卸载，因为 installpkg 没有对应的 removepkg 指令
+runcmd rpm -e patch
+runcmd rm /tmp/blivet.patch
