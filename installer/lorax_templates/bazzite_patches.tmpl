@@ -88,15 +88,17 @@ else:
 ## ==============================================================================
 
 # 1. 安装 patch 工具
-installpkg patch
+# 注意：installpkg 在模板中可能被延迟执行，导致后续 runcmd 找不到命令。
+# 改用 dnf 直接安装，确保即时生效。
+runcmd dnf install -y patch
 
 # 2. 应用 Patch
-runcmd patch -d ${target_site_packages} -p1 < /tmp/blivet.patch
+# 注意：runcmd 不支持 shell 重定向 (<)，必须使用 -i 参数指定输入文件
+runcmd patch -d ${target_site_packages} -p1 -i /tmp/blivet.patch
 
 # 3. 重新编译 Python 字节码
 runcmd python3 -m compileall -q ${target_site_packages}/blivet
 
 # 4. 清理 (卸载 patch，删除临时文件)
-# 注意：使用 rpm -e 卸载，因为 installpkg 没有对应的 removepkg 指令
-runcmd rpm -e patch
+runcmd dnf remove -y patch
 runcmd rm /tmp/blivet.patch
