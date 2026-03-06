@@ -51,35 +51,61 @@ with open(dracut_conf_path, "w") as f:
 
 
 # ==============================================================================
-# PART 2: 准备 Blivet Patch (复制 Patch 文件)
+# PART 2: 准备 Blivet Patch
 # ==============================================================================
 
-# 复制 workspace 中的 patch 文件到 chroot 的 /tmp 目录
+# 2.1 复制 Patch 文件
 workspace_patch = "/github/workspace/installer/patches/blivet-loop-partition.patch"
 dest_patch = os.path.join(root, "tmp/blivet.patch")
 
 if not os.path.exists(os.path.dirname(dest_patch)):
     os.makedirs(os.path.dirname(dest_patch))
 
-# 检查源文件是否存在
 if os.path.exists(workspace_patch):
     shutil.copy(workspace_patch, dest_patch)
 else:
     print(f"WARNING: Patch file not found at {workspace_patch}")
 
-# 动态查找 site-packages 路径 (兼容不同 Python 版本)
-site_packages_glob = os.path.join(root, "usr/lib/python3.*/site-packages")
-found_dirs = glob.glob(site_packages_glob)
-if found_dirs:
-    # 取第一个找到的路径
-    full_path = found_dirs[0]
-    # 计算相对路径，例如 usr/lib/python3.12/site-packages
-    rel_path = os.path.relpath(full_path, root)
-    # 转为绝对路径用于 runcmd
-    target_site_packages = "/" + rel_path
-else:
-    # Fallback
-    target_site_packages = "/usr/lib/python3.14/site-packages"
+# 2.2 创建 Patch 应用脚本 (apply_patch.sh)
+# 将 Shell 逻辑写入脚本文件，避免在 runcmd 中写复杂的单行命令
+apply_patch_script = """#!/bin/sh
+set -e
+
+echo "DEBUG: Current Python version: $(python3 --version)"
+
+# 查找 blivet 目录 (优先匹配 python3.14)
+echo "DEBUG: Searching for blivet directory..."
+BLIVET_DIR=$(find /usr/lib /usr/lib64 -name "blivet" -type d 2>/dev/null | grep "python3.14" | head -n 1)
+
+# 如果没找到 3.14，尝试任意 python3
+if [ -z "$BLIVET_DIR" ]; then
+    echo "WARNING: python3.14 version not found, searching generically..."
+    BLIVET_DIR=$(find /usr/lib /usr/lib64 -name "blivet" -type d 2>/dev/null | grep "python3" | head -n 1)
+fi
+
+if [ -z "$BLIVET_DIR" ]; then
+    echo "ERROR: blivet directory not found!"
+    ls -R /usr/lib/python3* 2>/dev/null | grep blivet || true
+    exit 1
+fi
+
+echo "DEBUG: Found blivet at: $BLIVET_DIR"
+SITE_PACKAGES=$(dirname "$BLIVET_DIR")
+
+echo "DEBUG: Applying patch to site-packages: $SITE_PACKAGES"
+patch -d "$SITE_PACKAGES" -p1 -i /tmp/blivet.patch
+
+echo "DEBUG: Recompiling python bytecode..."
+python3 -m compileall -q "$BLIVET_DIR"
+
+echo "DEBUG: Patch applied successfully."
+"""
+
+# 写入脚本到 chroot 的 /tmp
+script_path = os.path.join(root, "tmp/apply_patch.sh")
+with open(script_path, "w") as f:
+    f.write(apply_patch_script)
+os.chmod(script_path, 0o755)
 
 %>
 
@@ -88,17 +114,12 @@ else:
 ## ==============================================================================
 
 # 1. 安装 patch 工具
-# 注意：installpkg 在模板中可能被延迟执行，导致后续 runcmd 找不到命令。
-# 改用 dnf 直接安装，确保即时生效。
 runcmd dnf install -y patch
 
-# 2. 应用 Patch
-# 注意：runcmd 不支持 shell 重定向 (<)，必须使用 -i 参数指定输入文件
-runcmd patch -d ${target_site_packages} -p1 -i /tmp/blivet.patch
+# 2. 执行补丁脚本
+runcmd /tmp/apply_patch.sh
 
-# 3. 重新编译 Python 字节码
-runcmd python3 -m compileall -q ${target_site_packages}/blivet
-
-# 4. 清理 (卸载 patch，删除临时文件)
+# 3. 清理
 runcmd dnf remove -y patch
 runcmd rm /tmp/blivet.patch
+runcmd rm /tmp/apply_patch.sh
