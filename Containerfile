@@ -487,9 +487,15 @@ RUN --mount=type=cache,dst=/var/cache \
     if [ -f /usr/share/applications/net.lutris.Lutris.desktop ]; then \
         sed -i 's|^Exec=lutris %U$|Exec=env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python lutris %U|' /usr/share/applications/net.lutris.Lutris.desktop; \
     fi && \
-    sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/nvtop.desktop && \
-    sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/btop.desktop && \
-    sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/yad-icon-browser.desktop && \
+    if [ -f /usr/share/applications/nvtop.desktop ]; then \
+        sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/nvtop.desktop; \
+    fi && \
+    if [ -f /usr/share/applications/btop.desktop ]; then \
+        sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/btop.desktop; \
+    fi && \
+    if [ -f /usr/share/applications/yad-icon-browser.desktop ]; then \
+        sed -i 's@\[Desktop Entry\]@\[Desktop Entry\]\nNoDisplay=true@g' /usr/share/applications/yad-icon-browser.desktop; \
+    fi && \
     sed -i 's/#UserspaceHID.*/UserspaceHID=true/' /etc/bluetooth/input.conf && \
     sed -i "s|grub_probe\} --target=device /\`|grub_probe} --target=device /sysroot\`|g" /usr/bin/grub2-mkconfig && \
     rm -f /usr/lib/systemd/system/service.d/50-keep-warm.conf && \
@@ -540,7 +546,9 @@ RUN --mount=type=cache,dst=/var/cache \
         negativo17-fedora-uld \
         negativo17-fedora-multimedia; \
     do \
-        sed -i 's@enabled=1@enabled=0@g' /etc/yum.repos.d/$repo.repo; \
+        if [ -f /etc/yum.repos.d/$repo.repo ]; then \
+            sed -i 's@enabled=1@enabled=0@g' /etc/yum.repos.d/$repo.repo; \
+        fi; \
     done && for copr in \
         ublue-os/bazzite \
         ublue-os/bazzite-multilib \
@@ -552,43 +560,51 @@ RUN --mount=type=cache,dst=/var/cache \
         lizardbyte/beta \
         che/nerd-fonts; \
     do \
-        dnf5 -y copr disable $copr; \
+        dnf5 -y copr disable $copr || true; \
     done && unset -v copr && \
     eval "$(/ctx/dnf5-setopt setopt '*negativo17*' enabled=0)" && \
-    sed -i 's#/var/lib/selinux#/etc/selinux#g' /usr/lib/python3.*/site-packages/setroubleshoot/util.py && \
-    sed -i 's/power-saver=powersave$/power-saver=powersave-bazzite/' /etc/tuned/ppd.conf && \
-    sed -i 's/balanced=balanced$/balanced=balanced-bazzite/' /etc/tuned/ppd.conf && \
-    sed -i 's/performance=throughput-performance$/performance=throughput-performance-bazzite/' /etc/tuned/ppd.conf && \
-    sed -i 's/balanced=balanced-battery$/balanced=balanced-battery-bazzite\npower-saver=powersave-battery-bazzite/' /etc/tuned/ppd.conf && \
-    ln -s /usr/bin/true /usr/bin/pulseaudio && \
+    for f in /usr/lib/python3.*/site-packages/setroubleshoot/util.py; do \
+        if [ -f "$f" ]; then \
+            sed -i 's#/var/lib/selinux#/etc/selinux#g' "$f"; \
+        fi; \
+    done && \
+    if [ -f /etc/tuned/ppd.conf ]; then \
+        sed -i 's/power-saver=powersave$/power-saver=powersave-bazzite/' /etc/tuned/ppd.conf && \
+        sed -i 's/balanced=balanced$/balanced=balanced-bazzite/' /etc/tuned/ppd.conf && \
+        sed -i 's/performance=throughput-performance$/performance=throughput-performance-bazzite/' /etc/tuned/ppd.conf && \
+        sed -i 's/balanced=balanced-battery$/balanced=balanced-battery-bazzite\npower-saver=powersave-battery-bazzite/' /etc/tuned/ppd.conf; \
+    fi && \
+    ln -sf /usr/bin/true /usr/bin/pulseaudio && \
     mkdir -p /etc/flatpak/remotes.d && \
     curl --retry 3 -Lo /etc/flatpak/remotes.d/flathub.flatpakrepo https://dl.flathub.org/repo/flathub.flatpakrepo && \
-    chmod +x /usr/libexec/bazzite-mount-ntfs-exfat && \
-    systemctl enable brew-setup.service && \
-    systemctl disable fw-fanctrl.service && \
-    systemctl disable scx_loader.service && \
-    systemctl enable input-remapper.service && \
-    systemctl enable bazzite-flatpak-manager.service && \
-    systemctl enable bazzite-mount-ntfs-exfat.service && \
+    if [ -f /usr/libexec/bazzite-mount-ntfs-exfat ]; then \
+        chmod +x /usr/libexec/bazzite-mount-ntfs-exfat; \
+    fi && \
+    systemctl enable brew-setup.service || true && \
+    systemctl disable fw-fanctrl.service || true && \
+    systemctl disable scx_loader.service || true && \
+    systemctl enable input-remapper.service || true && \
+    systemctl enable bazzite-flatpak-manager.service || true && \
+    systemctl enable bazzite-mount-ntfs-exfat.service || true && \
 
-    systemctl disable rpm-ostreed-automatic.timer && \
-    systemctl enable uupd.timer && \
-    systemctl enable incus-workaround.service && \
-    systemctl enable bazzite-hardware-setup.service && \
+    systemctl disable rpm-ostreed-automatic.timer || true && \
+    systemctl enable uupd.timer || true && \
+    systemctl enable incus-workaround.service || true && \
+    systemctl enable bazzite-hardware-setup.service || true && \
     # systemctl disable tailscaled.service && \
-    systemctl enable dev-hugepages1G.mount && \
-    systemctl enable ds-inhibit.service && \
-    systemctl --global enable bazzite-user-setup.service && \
-    systemctl --global enable podman.socket && \
-    systemctl --global enable systemd-tmpfiles-setup.service && \
+    systemctl enable dev-hugepages1G.mount || true && \
+    systemctl enable ds-inhibit.service || true && \
+    systemctl --global enable bazzite-user-setup.service || true && \
+    systemctl --global enable podman.socket || true && \
+    systemctl --global enable systemd-tmpfiles-setup.service || true && \
     # systemctl --global disable sunshine.service && \
     # systemctl --global disable sunshine-kms.service && \
     # systemctl disable waydroid-container.service && \
-    systemctl enable greenboot-healthcheck.service && \
-    systemctl enable greenboot-set-rollback-trigger.service && \
-    systemctl disable force-wol.service && \
-    systemctl --global enable bazzite-dynamic-fixes.service && \
-    systemctl --global enable ntfs-nag.service && \
+    systemctl enable greenboot-healthcheck.service || true && \
+    systemctl enable greenboot-set-rollback-trigger.service || true && \
+    systemctl disable force-wol.service || true && \
+    systemctl --global enable bazzite-dynamic-fixes.service || true && \
+    systemctl --global enable ntfs-nag.service || true && \
     /ctx/ghcurl "https://raw.githubusercontent.com/doitsujin/dxvk/master/dxvk.conf" -Lo /etc/dxvk-example.conf && \
     # /ctx/ghcurl "https://raw.githubusercontent.com/ublue-os/waydroid-scripts/main/waydroid-choose-gpu.sh" -Lo /usr/bin/waydroid-choose-gpu && \
     # chmod +x /usr/bin/waydroid-choose-gpu && \
