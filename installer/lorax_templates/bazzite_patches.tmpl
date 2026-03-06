@@ -67,7 +67,6 @@ else:
     print(f"WARNING: Patch file not found at {workspace_patch}")
 
 # 2.2 创建 Patch 应用脚本 (apply_patch.sh)
-# 将 Shell 逻辑写入脚本文件，避免在 runcmd 中写复杂的单行命令
 apply_patch_script = """#!/bin/sh
 set -e
 
@@ -117,7 +116,9 @@ os.chmod(script_path, 0o755)
 runcmd dnf install -y patch
 
 # 2. 执行补丁脚本
-runcmd /tmp/apply_patch.sh
+# 注意：直接调用脚本文件可能因文件系统挂载选项(noexec)或路径查找问题而失败。
+# 最稳妥的方式是显式调用 shell 来执行脚本。
+runcmd sh /tmp/apply_patch.sh
 
 # 3. 清理
 runcmd dnf remove -y patch
