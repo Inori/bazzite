@@ -341,7 +341,7 @@ RUN --mount=type=cache,dst=/var/cache \
         libobs_vkcapture.i686 \
         libobs_glcapture.i686 \
         openxr && \
-    dnf5 -y --setopt=install_weak_deps=False install \
+    # dnf5 -y --setopt=install_weak_deps=False install \
         # steam \
         # lutris && \
     dnf5 -y remove \
@@ -722,7 +722,7 @@ RUN --mount=type=cache,dst=/var/cache \
     setfattr -n user.component -v "sdl2" /usr/share/sdl/gamecontrollerdb.txt && \
     dnf5 -y install \
     --repo copr:copr.fedorainfracloud.org:ublue-os:bazzite \
-        gamescope-session-plus \
+        gamescope-session-plus && \
         # gamescope-session-steam && \
     /ctx/cleanup
 
