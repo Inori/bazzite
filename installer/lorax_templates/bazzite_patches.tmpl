@@ -1,8 +1,8 @@
 <%page args="root"/>
 <%
 import os
-import shutil
 import glob
+import re
 
 # ==============================================================================
 # PART 1: 准备 Initrd 需要的文件 (NTFS3 支持)
@@ -23,7 +23,6 @@ fi
 exec "$MNT" -t ntfs3 "$@"
 """
 
-# 写入 /usr/sbin/mount.ntfs
 sbin_path = os.path.join(root, "usr/sbin/mount.ntfs")
 if not os.path.exists(os.path.dirname(sbin_path)):
     os.makedirs(os.path.dirname(sbin_path))
@@ -51,60 +50,136 @@ with open(dracut_conf_path, "w") as f:
 
 
 # ==============================================================================
-# PART 2: 准备 Blivet Patch
+# PART 2: 手动修改 Blivet 源码 (Python 字符串替换)
 # ==============================================================================
 
-# 2.1 复制 Patch 文件
-workspace_patch = "/github/workspace/installer/patches/blivet-loop-partition.patch"
-dest_patch = os.path.join(root, "tmp/blivet.patch")
+# 查找 blivet 目录 (在 install.img root 中)
+# 我们需要处理 root 前缀，并查找真实的 blivet 路径
+blivet_root = None
+search_paths = [
+    os.path.join(root, "usr/lib64/python3.*/site-packages/blivet"),
+    os.path.join(root, "usr/lib/python3.*/site-packages/blivet")
+]
 
-if not os.path.exists(os.path.dirname(dest_patch)):
-    os.makedirs(os.path.dirname(dest_patch))
+for pattern in search_paths:
+    found = glob.glob(pattern)
+    if found:
+        blivet_root = found[0]
+        break
 
-if os.path.exists(workspace_patch):
-    shutil.copy(workspace_patch, dest_patch)
+if not blivet_root:
+    print("ERROR: Could not find blivet directory in install tree!")
+    # 这里我们也可以抛出异常来终止构建
+    # raise RuntimeError("Blivet directory not found")
 else:
-    print(f"WARNING: Patch file not found at {workspace_patch}")
+    print(f"Found blivet at: {blivet_root}")
 
-# 2.2 创建 Patch 应用脚本 (apply_patch.sh)
-apply_patch_script = """#!/bin/sh
-set -e
+    # --------------------------------------------------------------------------
+    # 2.1 修改 blivet/devices/loop.py
+    # --------------------------------------------------------------------------
+    loop_py_path = os.path.join(blivet_root, "devices/loop.py")
+    if os.path.exists(loop_py_path):
+        with open(loop_py_path, "r") as f:
+            content = f.read()
+        
+        # 目标: 修改 LoopDevice 类定义
+        # 原文:
+        # class LoopDevice(StorageDevice):
+        #     """ A loop device. """
+        #     _type = "loop"
+        #     _external_dependencies = ...
+        
+        # 替换为:
+        # class LoopDevice(StorageDevice):
+        #     """ A loop device.
+        #
+        #     Treated as a partitionable disk so that partition devices like
+        #     loopNp1/loopNp2 can be represented as normal PartitionDevice
+        #     instances (useful for loop-backed disk images).
+        #     """
+        #     _type = "loop"
+        #     _partitionable = True
+        #     _is_disk = True
+        #     _external_dependencies = ...
+        
+        # 使用简单的字符串替换。为了稳健，我们替换类头和 docstring。
+        old_str = '    """ A loop device. """\n    _type = "loop"'
+        new_str = '    """ A loop device.\n\n    Treated as a partitionable disk so that partition devices like\n    loopNp1/loopNp2 can be represented as normal PartitionDevice\n    instances (useful for loop-backed disk images).\n    """\n    _type = "loop"\n    _partitionable = True\n    _is_disk = True'
+        
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(loop_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/devices/loop.py")
+        else:
+            print("WARNING: Could not find target string in blivet/devices/loop.py. Patch may be already applied or file changed.")
+    else:
+        print(f"WARNING: {loop_py_path} does not exist.")
 
-echo "DEBUG: Current Python version: $(python3 --version)"
 
-# 查找 blivet 目录 (优先匹配 python3.14)
-echo "DEBUG: Searching for blivet directory..."
-BLIVET_DIR=$(find /usr/lib /usr/lib64 -name "blivet" -type d 2>/dev/null | grep "python3.14" | head -n 1)
+    # --------------------------------------------------------------------------
+    # 2.2 修改 blivet/populator/helpers/loop.py
+    # --------------------------------------------------------------------------
+    helper_loop_py_path = os.path.join(blivet_root, "populator/helpers/loop.py")
+    if os.path.exists(helper_loop_py_path):
+        with open(helper_loop_py_path, "r") as f:
+            content = f.read()
 
-# 如果没找到 3.14，尝试任意 python3
-if [ -z "$BLIVET_DIR" ]; then
-    echo "WARNING: python3.14 version not found, searching generically..."
-    BLIVET_DIR=$(find /usr/lib /usr/lib64 -name "blivet" -type d 2>/dev/null | grep "python3" | head -n 1)
-fi
+        # 目标: 修改 match 方法
+        # 原文:
+        #     @classmethod
+        #     def match(cls, data):
+        #         return udev.device_is_loop(data)
+        
+        # 替换为:
+        #     @classmethod
+        #     def match(cls, data):
+        #         """Match only whole loop devices, not their partitions.
+        #
+        #         For example, match "loop2", but let PartitionDevicePopulator
+        #         handle "loop2p1" etc.
+        #         """
+        #         return udev.device_is_loop(data) and not udev.device_is_partition(data)
+        
+        old_str = '    def match(cls, data):\n        return udev.device_is_loop(data)'
+        new_str = '    def match(cls, data):\n        """Match only whole loop devices, not their partitions.\n\n        For example, match "loop2", but let PartitionDevicePopulator\n        handle "loop2p1" etc.\n        """\n        return udev.device_is_loop(data) and not udev.device_is_partition(data)'
 
-if [ -z "$BLIVET_DIR" ]; then
-    echo "ERROR: blivet directory not found!"
-    ls -R /usr/lib/python3* 2>/dev/null | grep blivet || true
-    exit 1
-fi
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(helper_loop_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/populator/helpers/loop.py")
+        else:
+            print("WARNING: Could not find target string in blivet/populator/helpers/loop.py.")
 
-echo "DEBUG: Found blivet at: $BLIVET_DIR"
-SITE_PACKAGES=$(dirname "$BLIVET_DIR")
+    else:
+        print(f"WARNING: {helper_loop_py_path} does not exist.")
 
-echo "DEBUG: Applying patch to site-packages: $SITE_PACKAGES"
-patch -d "$SITE_PACKAGES" -p1 -i /tmp/blivet.patch
 
-echo "DEBUG: Recompiling python bytecode..."
-python3 -m compileall -q "$BLIVET_DIR"
+    # --------------------------------------------------------------------------
+    # 2.3 修改 blivet/populator/helpers/partition.py (可选，增加 log)
+    # --------------------------------------------------------------------------
+    helper_part_py_path = os.path.join(blivet_root, "populator/helpers/partition.py")
+    if os.path.exists(helper_part_py_path):
+        with open(helper_part_py_path, "r") as f:
+            content = f.read()
 
-echo "DEBUG: Patch applied successfully."
-"""
+        # 目标: 在 return 之前增加 log.debug
+        # log.error("failure finding disk for %s", name)
+        # return
+        
+        old_str = '            log.error("failure finding disk for %s", name)\n            return'
+        new_str = '            log.error("failure finding disk for %s", name)\n            return\n\n        log.debug("PartitionDevicePopulator: parent disk %s, partitionable=%s, partitioned=%s, fmt=%s, fmt_supported=%s",\n                  disk.name, disk.partitionable, disk.partitioned,\n                  getattr(disk.format, "type", None), getattr(disk.format, "supported", None))'
 
-# 写入脚本到 chroot 的 /tmp
-script_path = os.path.join(root, "tmp/apply_patch.sh")
-with open(script_path, "w") as f:
-    f.write(apply_patch_script)
-os.chmod(script_path, 0o755)
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(helper_part_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/populator/helpers/partition.py")
+        else:
+             print("WARNING: Could not find target string in blivet/populator/helpers/partition.py.")
+    else:
+        print(f"WARNING: {helper_part_py_path} does not exist.")
 
 %>
 
@@ -112,15 +187,14 @@ os.chmod(script_path, 0o755)
 ## PART 3: Lorax 指令 (在 chroot 环境执行)
 ## ==============================================================================
 
-# 1. 安装 patch 工具
-runcmd dnf install -y patch
+# 重新编译 Python 字节码
+# 既然我们已经确切知道 blivet 在哪里，我们可以直接编译它
+# 注意：这里我们使用 chroot 内部的路径。Python代码里用的 blivet_root 包含 root 前缀，
+# 我们需要把它剥离成 chroot 内的路径。
 
-# 2. 执行补丁脚本
-# 注意：直接调用脚本文件可能因文件系统挂载选项(noexec)或路径查找问题而失败。
-# 最稳妥的方式是显式调用 shell 来执行脚本。
-runcmd sh /tmp/apply_patch.sh
+<%
+# 计算 chroot 内的 blivet 路径
+chroot_blivet_path = "/" + os.path.relpath(blivet_root, root)
+%>
 
-# 3. 清理
-runcmd dnf remove -y patch
-runcmd rm /tmp/blivet.patch
-runcmd rm /tmp/apply_patch.sh
+runcmd python3 -m compileall -q ${chroot_blivet_path}
