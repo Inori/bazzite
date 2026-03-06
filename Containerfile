@@ -219,7 +219,7 @@ RUN --mount=type=cache,dst=/var/cache \
         lato-fonts \
         fira-code-fonts \
         nerd-fonts \
-        Sunshine \
+        # Sunshine \
         python3-pip \
         libadwaita \
         bees \
@@ -240,7 +240,7 @@ RUN --mount=type=cache,dst=/var/cache \
         ladspa-noise-suppression-for-voice \
         pipewire-module-filter-chain-sofa \
         python3-icoextract \
-        tailscale \
+        # tailscale \
         webapp-manager \
         btop \
         duf \
@@ -264,30 +264,30 @@ RUN --mount=type=cache,dst=/var/cache \
         glow \
         gum \
         vim \
-        cockpit-networkmanager \
-        cockpit-podman \
-        cockpit-selinux \
-        cockpit-system \
-        cockpit-files \
-        cockpit-storaged \
+        # cockpit-networkmanager \
+        # cockpit-podman \
+        # cockpit-selinux \
+        # cockpit-system \
+        # cockpit-files \
+        # cockpit-storaged \
         topgrade \
         ydotool \
         stress-ng \
         snapper \
         btrfs-assistant \
-        edk2-ovmf \
-        qemu \
-        libvirt \
-        guestfs-tools \
+        # edk2-ovmf \
+        # qemu \
+        # libvirt \
+        # guestfs-tools \
         lsb_release \
         uupd \
         ds-inhibit \
         rocm-hip \
         rocm-opencl \
         rocm-clinfo \
-        waydroid \
-        cage \
-        wlr-randr \
+        # waydroid \
+        # cage \
+        # wlr-randr \
         bazzite-portal \
         ls-iommu && \
     systemctl mask iscsi && \
@@ -298,16 +298,16 @@ RUN --mount=type=cache,dst=/var/cache \
     setfattr -n user.component -v "extest" /usr/lib/extest/libextest.so && \
     chmod +x /usr/bin/framework_tool && \
     sed -i 's|uupd|& --disable-module-distrobox|' /usr/lib/systemd/system/uupd.service && \
-    setcap 'cap_sys_admin+p' $(readlink -f /usr/bin/sunshine) && \
+    setcap 'cap_sys_admin+p' $(readlink -f /usr/bin/sunshine) || true && \
     : "Use sunshine-kms.service instead to workaround upstream issues with BETA" && \
-    sed -i 's|Exec=/usr/bin/env systemctl start --u sunshine|Exec=/usr/bin/env systemctl start --u sunshine-kms|' /usr/share/applications/dev.lizardbyte.app.Sunshine.desktop && \
+    # sed -i 's|Exec=/usr/bin/env systemctl start --u sunshine|Exec=/usr/bin/env systemctl start --u sunshine-kms|' /usr/share/applications/dev.lizardbyte.app.Sunshine.desktop && \
     dnf5 -y --setopt=install_weak_deps=False install \
         rocm-hip \
         rocm-opencl \
         rocm-clinfo \
         rocm-smi && \
     mkdir -p /etc/xdg/autostart && \
-    sed -i~ -E 's/=.\$\(command -v (nft|ip6?tables-legacy).*/=/g' /usr/lib/waydroid/data/scripts/waydroid-net.sh && \
+    # sed -i~ -E 's/=.\$\(command -v (nft|ip6?tables-legacy).*/=/g' /usr/lib/waydroid/data/scripts/waydroid-net.sh && \
     sed -i 's/ --xdg-runtime=\\"${XDG_RUNTIME_DIR}\\"//g' /usr/bin/btrfs-assistant-launcher && \
     /ctx/cleanup
 
@@ -342,8 +342,8 @@ RUN --mount=type=cache,dst=/var/cache \
         libobs_glcapture.i686 \
         openxr && \
     dnf5 -y --setopt=install_weak_deps=False install \
-        steam \
-        lutris && \
+        # steam \
+        # lutris && \
     dnf5 -y remove \
         gamemode && \
     /ctx/ghcurl "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks" -Lo /usr/bin/winetricks && \
@@ -571,23 +571,23 @@ RUN --mount=type=cache,dst=/var/cache \
     systemctl enable uupd.timer && \
     systemctl enable incus-workaround.service && \
     systemctl enable bazzite-hardware-setup.service && \
-    systemctl disable tailscaled.service && \
+    # systemctl disable tailscaled.service && \
     systemctl enable dev-hugepages1G.mount && \
     systemctl enable ds-inhibit.service && \
     systemctl --global enable bazzite-user-setup.service && \
     systemctl --global enable podman.socket && \
     systemctl --global enable systemd-tmpfiles-setup.service && \
-    systemctl --global disable sunshine.service && \
-    systemctl --global disable sunshine-kms.service && \
-    systemctl disable waydroid-container.service && \
+    # systemctl --global disable sunshine.service && \
+    # systemctl --global disable sunshine-kms.service && \
+    # systemctl disable waydroid-container.service && \
     systemctl enable greenboot-healthcheck.service && \
     systemctl enable greenboot-set-rollback-trigger.service && \
     systemctl disable force-wol.service && \
     systemctl --global enable bazzite-dynamic-fixes.service && \
     systemctl --global enable ntfs-nag.service && \
     /ctx/ghcurl "https://raw.githubusercontent.com/doitsujin/dxvk/master/dxvk.conf" -Lo /etc/dxvk-example.conf && \
-    /ctx/ghcurl "https://raw.githubusercontent.com/ublue-os/waydroid-scripts/main/waydroid-choose-gpu.sh" -Lo /usr/bin/waydroid-choose-gpu && \
-    chmod +x /usr/bin/waydroid-choose-gpu && \
+    # /ctx/ghcurl "https://raw.githubusercontent.com/ublue-os/waydroid-scripts/main/waydroid-choose-gpu.sh" -Lo /usr/bin/waydroid-choose-gpu && \
+    # chmod +x /usr/bin/waydroid-choose-gpu && \
     dnf5 config-manager setopt skip_if_unavailable=1 && \
     /ctx/ghcurl "https://github.com/ublue-os/toolboxes/raw/refs/heads/main/apps/docker/distrobox.ini" -Lo /etc/distrobox/docker.ini && \
     setfattr -n user.component -v "toolbox-config" /etc/distrobox/docker.ini && \
@@ -670,7 +670,7 @@ RUN --mount=type=cache,dst=/var/cache \
         steamos-manager \
         acpica-tools \
         vpower \
-        steam_notif_daemon \
+        # steam_notif_daemon \
         sdgyrodsu \
         ibus-pinyin \
         ibus-table-chinese-cangjie \
@@ -723,7 +723,7 @@ RUN --mount=type=cache,dst=/var/cache \
     dnf5 -y install \
     --repo copr:copr.fedorainfracloud.org:ublue-os:bazzite \
         gamescope-session-plus \
-        gamescope-session-steam && \
+        # gamescope-session-steam && \
     /ctx/cleanup
 
 # Cleanup & Finalize
@@ -732,8 +732,8 @@ RUN --mount=type=cache,dst=/var/cache \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=tmpfs,dst=/tmp \
     mkdir -p "/etc/xdg/autostart" && \
-    mv "/etc/skel/.config/autostart/steam.desktop" "/etc/xdg/autostart/steam.desktop" && \
-    sed -i 's@Exec=waydroid first-launch@Exec=/usr/bin/waydroid-launcher first-launch\nX-Steam-Library-Capsule=/usr/share/applications/Waydroid/capsule.png\nX-Steam-Library-Hero=/usr/share/applications/Waydroid/hero.png\nX-Steam-Library-Logo=/usr/share/applications/Waydroid/logo.png\nX-Steam-Library-StoreCapsule=/usr/share/applications/Waydroid/store-logo.png\nX-Steam-Controller-Template=Desktop@g' /usr/share/applications/Waydroid.desktop && \
+    # mv "/etc/skel/.config/autostart/steam.desktop" "/etc/xdg/autostart/steam.desktop" && \
+    # sed -i 's@Exec=waydroid first-launch@Exec=/usr/bin/waydroid-launcher first-launch\nX-Steam-Library-Capsule=/usr/share/applications/Waydroid/capsule.png\nX-Steam-Library-Hero=/usr/share/applications/Waydroid/hero.png\nX-Steam-Library-Logo=/usr/share/applications/Waydroid/logo.png\nX-Steam-Library-StoreCapsule=/usr/share/applications/Waydroid/store-logo.png\nX-Steam-Controller-Template=Desktop@g' /usr/share/applications/Waydroid.desktop && \
     if grep -q "kinoite" <<< "${BASE_IMAGE_NAME}"; then \
         sed -i 's/Exec=.*/Exec=systemctl start return-to-gamemode.service/' /etc/skel/Desktop/Return.desktop \
     ; fi && \
