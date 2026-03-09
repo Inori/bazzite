@@ -1,8 +1,9 @@
 <%page args="root"/>
 <%
-import base64
+import compileall
 import os
 import glob
+import pathlib
 import re
 
 # ==============================================================================
@@ -17,19 +18,73 @@ if not os.path.exists(os.path.dirname(mod_conf_path)):
 with open(mod_conf_path, "w") as f:
     f.write("ntfs3\nloop\niso9660\nsr_mod\n")
 
-# 3. 创建 Dracut 配置 (让 dracut 把上述文件吸入 initrd)
+# 2. 创建自定义 Dracut 模块。
+# 不再依赖“先改 rootfs，再由 dracut 原样带入”的链路，
+# 而是在 dracut 真正装配 initrd 时，最后把 mount.ntfs 强制写进 $initdir。
+dracut_module_dir = os.path.join(root, "usr/lib/dracut/modules.d/99bazzite-ntfs3")
+os.makedirs(dracut_module_dir, exist_ok=True)
+module_setup_path = os.path.join(dracut_module_dir, "module-setup.sh")
+with open(module_setup_path, "w", encoding="utf-8") as f:
+    f.write("""#!/usr/bin/bash
+check() {
+    return 0
+}
+
+depends() {
+    return 0
+}
+
+installkernel() {
+    instmods ntfs3 loop iso9660 sr_mod
+}
+
+install() {
+    inst_multiple mount
+
+    mkdir -p \"$initdir/etc/modules-load.d\"
+    printf 'ntfs3\nloop\niso9660\nsr_mod\n' >\"$initdir/etc/modules-load.d/early.conf\"
+
+    mkdir -p \"$initdir/usr/bin\"
+    rm -f \"$initdir/usr/bin/mount.ntfs\"
+    cat >\"$initdir/usr/bin/mount.ntfs\" <<'EOF'
+#!/bin/sh
+# Try to locate a usable mount binary.
+if command -v mount >/dev/null 2>&1; then
+    MNT=\"$(command -v mount)\"
+elif [ -x /usr/bin/mount ]; then
+    MNT=\"/usr/bin/mount\"
+elif [ -x /bin/mount ]; then
+    MNT=\"/bin/mount\"
+else
+    MNT=\"mount\"
+fi
+exec \"$MNT\" -t ntfs3 \"$@\"
+EOF
+    chmod 0755 \"$initdir/usr/bin/mount.ntfs\"
+
+    if [ -d \"$initdir/usr/sbin\" ] || [ -L \"$initdir/usr/sbin\" ]; then
+        rm -f \"$initdir/usr/sbin/mount.ntfs\"
+        cp -f \"$initdir/usr/bin/mount.ntfs\" \"$initdir/usr/sbin/mount.ntfs\"
+    fi
+}
+""")
+os.chmod(module_setup_path, 0o755)
+
+# 3. 创建 Dracut 配置，让 dracut 启用驱动并加载上面的自定义模块。
 dracut_conf_path = os.path.join(root, "etc/dracut.conf.d/10-bazzite-installer-ntfs3.conf")
 if not os.path.exists(os.path.dirname(dracut_conf_path)):
     os.makedirs(os.path.dirname(dracut_conf_path))
 
 with open(dracut_conf_path, "w") as f:
     f.write('add_drivers+=" ntfs3 loop iso9660 sr_mod "\n')
-    f.write('install_items+=" /usr/sbin/mount.ntfs /etc/modules-load.d/early.conf "\n')
+    f.write('add_dracutmodules+=" bazzite-ntfs3 "\n')
+
 
 
 # ==============================================================================
 # PART 2: 手动修改 Blivet 源码 (Python 字符串替换)
 # ==============================================================================
+
 
 # 查找 blivet 目录 (在 install.img root 中)
 # 我们需要处理 root 前缀，并查找真实的 blivet 路径
@@ -159,66 +214,8 @@ else:
     else:
         print(f"WARNING: {helper_part_py_path} does not exist.")
 
+    # 直接对 install tree 里的 blivet 重新编译字节码，避免依赖 runcmd 的宿主执行语义。
+    compileall.compile_dir(blivet_root, quiet=1, force=True)
+
 %>
 
-## ==============================================================================
-## PART 3: Lorax 指令 (在 chroot 环境执行)
-## ==============================================================================
-
-# 重新编译 Python 字节码
-# 既然我们已经确切知道 blivet 在哪里，我们可以直接编译它
-# 注意：这里我们使用 chroot 内部的路径。Python代码里用的 blivet_root 包含 root 前缀，
-# 我们需要把它剥离成 chroot 内的路径。
-
-<%
-# 计算 chroot 内的 blivet 路径
-chroot_blivet_path = "/" + os.path.relpath(blivet_root, root)
-
-# 生成用于修复 mount.ntfs 的辅助 Python 脚本
-# 我们将代码逻辑保留在这里以保证可读性，但通过 base64 编码传递给 runcmd 执行
-fix_ntfs_code = r"""
-import os
-import pathlib
-
-import base64
-
-# 目标文件路径
-p = pathlib.Path("/usr/sbin/mount.ntfs")
-
-# 如果文件存在或是一个符号链接，先删除它
-# 这一步至关重要，防止写入操作跟随软链接修改了错误的目标（如 /bin/ntfs-3g）
-if p.exists() or p.is_symlink():
-    try:
-        p.unlink()
-    except OSError:
-        os.remove(p)
-
-# 确保目录存在
-p.parent.mkdir(parents=True, exist_ok=True)
-
-# 写入 wrapper 脚本内容
-script_content = '''#!/bin/sh
-# Try to locate a usable mount binary.
-if command -v mount >/dev/null 2>&1; then
-    MNT="$(command -v mount)"
-elif [ -x /usr/bin/mount ]; then
-    MNT="/usr/bin/mount"
-elif [ -x /bin/mount ]; then
-    MNT="/bin/mount"
-else
-    MNT="mount"
-fi
-exec "$MNT" -t ntfs3 "$@"
-'''
-
-p.write_text(script_content)
-os.chmod(p, 0o755)
-"""
-
-# 使用 base64 编码 Python 脚本，以便在 runcmd 中安全执行
-# 这种方式既不需要生成临时文件，又能保持代码在模板中的可读性
-fix_ntfs_encoded = base64.b64encode(fix_ntfs_code.encode("utf-8")).decode("utf-8")
-%>
-
-runcmd python3 -m compileall -q ${chroot_blivet_path}
-runcmd python3 -c "import base64; exec(base64.b64decode(b'${fix_ntfs_encoded}'))"
