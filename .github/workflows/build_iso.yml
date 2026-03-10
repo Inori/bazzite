@@ -176,83 +176,83 @@ jobs:
             --env ISO_NAME="${ISO_NAME}" \
             --env OUTPUT_INITRD_NAME="${OUTPUT_INITRD_NAME}" \
             quay.io/fedora/fedora:43 \
-            bash -euo pipefail -c '
-              dnf install -y cpio file gzip isomd5sum xorriso xz zstd
+            bash -seuo pipefail <<'CONTAINER_SCRIPT'
+          dnf install -y cpio file gzip isomd5sum xorriso xz zstd
 
-              WORKDIR=$(mktemp -d)
-              trap '\''rm -rf "$WORKDIR"'\'' EXIT
+          WORKDIR=$(mktemp -d)
+          trap 'rm -rf "$WORKDIR"' EXIT
 
-              ISO_PATH="/iso/${ISO_NAME}"
-              ORIG_INITRD="$WORKDIR/initrd.orig.img"
-              INITRD_WORK="$WORKDIR/initrd-work"
-              FIXED_INITRD="/iso/${OUTPUT_INITRD_NAME}"
-              PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
+          ISO_PATH="/iso/${ISO_NAME}"
+          ORIG_INITRD="$WORKDIR/initrd.orig.img"
+          INITRD_WORK="$WORKDIR/initrd-work"
+          FIXED_INITRD="/iso/${OUTPUT_INITRD_NAME}"
+          PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
 
-              mkdir -p "$INITRD_WORK"
+          mkdir -p "$INITRD_WORK"
 
-              xorriso -osirrox on -indev "$ISO_PATH" -extract /images/pxeboot/initrd.img "$ORIG_INITRD"
+          xorriso -osirrox on -indev "$ISO_PATH" -extract /images/pxeboot/initrd.img "$ORIG_INITRD"
 
-              FILE_INFO=$(file -b "$ORIG_INITRD")
-              case "$FILE_INFO" in
-                *"XZ compressed data"*)
-                  (cd "$INITRD_WORK" && xzcat "$ORIG_INITRD" | cpio -idmv)
-                  ;;
-                *"gzip compressed data"*)
-                  (cd "$INITRD_WORK" && gzip -dc "$ORIG_INITRD" | cpio -idmv)
-                  ;;
-                *"Zstandard compressed data"*)
-                  (cd "$INITRD_WORK" && zstd -dc "$ORIG_INITRD" | cpio -idmv)
-                  ;;
-                *)
-                  echo "::error::Unsupported initrd compression: $FILE_INFO"
-                  exit 1
-                  ;;
-              esac
+          FILE_INFO=$(file -b "$ORIG_INITRD")
+          case "$FILE_INFO" in
+            *"XZ compressed data"*)
+              (cd "$INITRD_WORK" && xzcat "$ORIG_INITRD" | cpio -idmv)
+              ;;
+            *"gzip compressed data"*)
+              (cd "$INITRD_WORK" && gzip -dc "$ORIG_INITRD" | cpio -idmv)
+              ;;
+            *"Zstandard compressed data"*)
+              (cd "$INITRD_WORK" && zstd -dc "$ORIG_INITRD" | cpio -idmv)
+              ;;
+            *)
+              echo "::error::Unsupported initrd compression: $FILE_INFO"
+              exit 1
+              ;;
+          esac
 
-              if [ ! -e "$INITRD_WORK/sbin" ]; then
-                mkdir -p "$INITRD_WORK/sbin"
-              fi
-              mkdir -p "$INITRD_WORK/etc/modules-load.d"
-              if [ -e "$INITRD_WORK/sbin/mount.ntfs" ]; then
+          if [ ! -e "$INITRD_WORK/sbin" ]; then
+            mkdir -p "$INITRD_WORK/sbin"
+          fi
+          mkdir -p "$INITRD_WORK/etc/modules-load.d"
+          if [ -e "$INITRD_WORK/sbin/mount.ntfs" ]; then
+            mv "$INITRD_WORK/sbin/mount.ntfs" "$INITRD_WORK/sbin/mount.ntfs.orig"
+          fi
 
-                mv "$INITRD_WORK/sbin/mount.ntfs" "$INITRD_WORK/sbin/mount.ntfs.orig"
-              fi
+          cat > "$INITRD_WORK/sbin/mount.ntfs" <<'EOF'
+          #!/bin/sh
+          # Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.
+          # Try to locate a usable mount binary.
+          if command -v mount >/dev/null 2>&1; then
+            MNT="$(command -v mount)"
+          elif [ -x /usr/bin/mount ]; then
+            MNT="/usr/bin/mount"
+          elif [ -x /bin/mount ]; then
+            MNT="/bin/mount"
+          else
+            # Fallback: hope PATH resolves it
+            MNT="mount"
+          fi
+          exec "$MNT" -t ntfs3 "$@"
+          EOF
 
-              printf '%s\n' \
-                '#!/bin/sh' \
-                '# Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.' \
-                '# Try to locate a usable mount binary.' \
-                'if command -v mount >/dev/null 2>&1; then' \
-                '  MNT="$(command -v mount)"' \
-                'elif [ -x /usr/bin/mount ]; then' \
-                '  MNT="/usr/bin/mount"' \
-                'elif [ -x /bin/mount ]; then' \
-                '  MNT="/bin/mount"' \
-                'else' \
-                '  # Fallback: hope PATH resolves it' \
-                '  MNT="mount"' \
-                'fi' \
-                'exec "$MNT" -t ntfs3 "$@"' \
-                > "$INITRD_WORK/sbin/mount.ntfs"
+          chmod 0755 "$INITRD_WORK/sbin/mount.ntfs"
+          printf "ntfs3\nloop\niso9660\nsr_mod\n" > "$INITRD_WORK/etc/modules-load.d/early.conf"
 
-              chmod 0755 "$INITRD_WORK/sbin/mount.ntfs"
-              printf "ntfs3\nloop\niso9660\nsr_mod\n" >"$INITRD_WORK/etc/modules-load.d/early.conf"
+          (
+            cd "$INITRD_WORK"
+            find . | cpio -H newc -o | xz -C crc32 -z -9e > "$FIXED_INITRD"
+          )
 
-              (
-                cd "$INITRD_WORK"
-                find . | cpio -H newc -o | xz -C crc32 -z -9e > "$FIXED_INITRD"
-              )
+          xorriso -indev "$ISO_PATH" \
+            -outdev "$PATCHED_ISO" \
+            -map "$FIXED_INITRD" /images/pxeboot/initrd.img \
+            -boot_image any replay \
+            -commit
 
-              xorriso -indev "$ISO_PATH" \
-                -outdev "$PATCHED_ISO" \
-                -map "$FIXED_INITRD" /images/pxeboot/initrd.img \
-                -boot_image any replay \
-                -commit
+          mv -f "$PATCHED_ISO" "$ISO_PATH"
+          implantisomd5 "$ISO_PATH"
+          checkisomd5 --verbose "$ISO_PATH"
+          CONTAINER_SCRIPT
 
-              mv -f "$PATCHED_ISO" "$ISO_PATH"
-              implantisomd5 "$ISO_PATH"
-              checkisomd5 --verbose "$ISO_PATH"
-            '
 
       - name: Move ISOs to Upload Directory
         id: upload-directory
