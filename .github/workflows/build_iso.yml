@@ -218,22 +218,23 @@ jobs:
                 mv "$INITRD_WORK/sbin/mount.ntfs" "$INITRD_WORK/sbin/mount.ntfs.orig"
               fi
 
-              cat >"$INITRD_WORK/sbin/mount.ntfs" <<'\''EOF'\''
-#!/bin/sh
-# Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.
-# Try to locate a usable mount binary.
-if command -v mount >/dev/null 2>&1; then
-  MNT="$(command -v mount)"
-elif [ -x /usr/bin/mount ]; then
-  MNT="/usr/bin/mount"
-elif [ -x /bin/mount ]; then
-  MNT="/bin/mount"
-else
-  # Fallback: hope PATH resolves it
-  MNT="mount"
-fi
-exec "$MNT" -t ntfs3 "$@"
-EOF
+              printf '%s\n' \
+                '#!/bin/sh' \
+                '# Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.' \
+                '# Try to locate a usable mount binary.' \
+                'if command -v mount >/dev/null 2>&1; then' \
+                '  MNT="$(command -v mount)"' \
+                'elif [ -x /usr/bin/mount ]; then' \
+                '  MNT="/usr/bin/mount"' \
+                'elif [ -x /bin/mount ]; then' \
+                '  MNT="/bin/mount"' \
+                'else' \
+                '  # Fallback: hope PATH resolves it' \
+                '  MNT="mount"' \
+                'fi' \
+                'exec "$MNT" -t ntfs3 "$@"' \
+                > "$INITRD_WORK/sbin/mount.ntfs"
+
               chmod 0755 "$INITRD_WORK/sbin/mount.ntfs"
               printf "ntfs3\nloop\niso9660\nsr_mod\n" >"$INITRD_WORK/etc/modules-load.d/early.conf"
 
