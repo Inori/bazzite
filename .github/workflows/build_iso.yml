@@ -185,7 +185,8 @@ jobs:
           ISO_PATH="/iso/${ISO_NAME}"
           ORIG_INITRD="$WORKDIR/initrd.orig.img"
           INITRD_WORK="$WORKDIR/initrd-work"
-          FIXED_INITRD="/iso/${OUTPUT_INITRD_NAME}"
+          FIXED_INITRD="$WORKDIR/initrd.fixed.img"
+
           PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
 
           mkdir -p "$INITRD_WORK"
@@ -258,18 +259,32 @@ jobs:
         id: upload-directory
         shell: bash
         run: |
+          set -euo pipefail
+
           ISO_UPLOAD_DIR=${{ github.workspace }}/upload
           ISO_DIR=$(readlink -f "${{ steps.build.outputs.iso_path }}")
           ISO_NAME="${{ steps.build.outputs.iso_name }}"
           INITRD_NAME="${{ matrix.image_name }}-initrd.img"
           ISO_DEST=${ISO_UPLOAD_DIR}/${ISO_NAME}
 
-          mkdir -p ${ISO_UPLOAD_DIR}
+          mkdir -p "${ISO_UPLOAD_DIR}"
           mv "${ISO_DIR}/${ISO_NAME}" "${ISO_DEST}"
           sha256sum "${ISO_DEST}" > "${ISO_DEST}-CHECKSUM"
-          cp "${ISO_DIR}/${INITRD_NAME}" "${ISO_UPLOAD_DIR}/${INITRD_NAME}"
 
-          echo "iso-upload-dir=${ISO_UPLOAD_DIR}" >> $GITHUB_OUTPUT
+          docker run --rm \
+            --volume "${ISO_UPLOAD_DIR}:/artifacts" \
+            --env ISO_NAME="${ISO_NAME}" \
+            --env INITRD_NAME="${INITRD_NAME}" \
+            quay.io/fedora/fedora:43 \
+            bash -seuo pipefail <<'CONTAINER_SCRIPT'
+          dnf install -y xorriso
+          xorriso -osirrox on \
+            -indev "/artifacts/${ISO_NAME}" \
+            -extract /images/pxeboot/initrd.img "/artifacts/${INITRD_NAME}"
+          CONTAINER_SCRIPT
+
+          echo "iso-upload-dir=${ISO_UPLOAD_DIR}" >> "$GITHUB_OUTPUT"
+
 
 
 
