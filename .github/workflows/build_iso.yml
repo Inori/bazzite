@@ -100,9 +100,10 @@ jobs:
 
       - name: Lowercase Registry
         id: registry_case
-        uses: ASzc/change-string-case-action@d0603cd0a7dd490be678164909f65c7737470a7f # v6
-        with:
-          string: ${{ env.IMAGE_REGISTRY }}
+        shell: bash
+        run: |
+          echo "lowercase=${IMAGE_REGISTRY,,}" >> "$GITHUB_OUTPUT"
+
 
       - name: Determine Flatpak Dependencies
         id: flatpak_dependencies
@@ -177,7 +178,7 @@ jobs:
             --env OUTPUT_INITRD_NAME="${OUTPUT_INITRD_NAME}" \
             quay.io/fedora/fedora:43 \
             bash -seuo pipefail <<'CONTAINER_SCRIPT'
-          dnf install -y cpio file gzip isomd5sum xorriso xz zstd
+          dnf install -y cpio gzip isomd5sum xorriso xz
 
           WORKDIR=$(mktemp -d)
           trap 'rm -rf "$WORKDIR"' EXIT
@@ -186,39 +187,25 @@ jobs:
           ORIG_INITRD="$WORKDIR/initrd.orig.img"
           INITRD_WORK="$WORKDIR/initrd-work"
           FIXED_INITRD="$WORKDIR/initrd.fixed.img"
+          ARTIFACT_INITRD="/iso/${OUTPUT_INITRD_NAME}"
 
           PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
 
-          mkdir -p "$INITRD_WORK"
-
           xorriso -osirrox on -indev "$ISO_PATH" -extract /images/pxeboot/initrd.img "$ORIG_INITRD"
 
-          FILE_INFO=$(file -b "$ORIG_INITRD")
-          case "$FILE_INFO" in
-            *"XZ compressed data"*)
-              (cd "$INITRD_WORK" && xzcat "$ORIG_INITRD" | cpio -idmv)
-              ;;
-            *"gzip compressed data"*)
-              (cd "$INITRD_WORK" && gzip -dc "$ORIG_INITRD" | cpio -idmv)
-              ;;
-            *"Zstandard compressed data"*)
-              (cd "$INITRD_WORK" && zstd -dc "$ORIG_INITRD" | cpio -idmv)
-              ;;
-            *)
-              echo "::error::Unsupported initrd compression: $FILE_INFO"
-              exit 1
-              ;;
-          esac
+          mkdir -p "$INITRD_WORK"
+          cd "$INITRD_WORK"
 
-          if [ ! -e "$INITRD_WORK/sbin" ]; then
-            mkdir -p "$INITRD_WORK/sbin"
-          fi
-          mkdir -p "$INITRD_WORK/etc/modules-load.d"
-          if [ -e "$INITRD_WORK/sbin/mount.ntfs" ]; then
-            mv "$INITRD_WORK/sbin/mount.ntfs" "$INITRD_WORK/sbin/mount.ntfs.orig"
-          fi
+          # User's exact manual extraction
+          xzcat "$ORIG_INITRD" | cpio -idmv
 
-          cat > "$INITRD_WORK/sbin/mount.ntfs" <<'EOF'
+          # User's exact modification
+          if [ -e sbin/mount.ntfs ]; then
+            mv sbin/mount.ntfs sbin/mount.ntfs.orig
+          fi
+          
+          mkdir -p sbin
+          cat > sbin/mount.ntfs <<'EOF'
           #!/bin/sh
           # Redirect any "mount -t ntfs" to the in-kernel ntfs3 driver during initramfs.
           # Try to locate a usable mount binary.
@@ -235,13 +222,15 @@ jobs:
           exec "$MNT" -t ntfs3 "$@"
           EOF
 
-          chmod 0755 "$INITRD_WORK/sbin/mount.ntfs"
-          printf "ntfs3\nloop\niso9660\nsr_mod\n" > "$INITRD_WORK/etc/modules-load.d/early.conf"
+          chmod +x sbin/mount.ntfs
 
-          (
-            cd "$INITRD_WORK"
-            find . | cpio -H newc -o | xz -C crc32 -z -9e > "$FIXED_INITRD"
-          )
+          mkdir -p etc/modules-load.d
+          printf "ntfs3\nloop\niso9660\nsr_mod\n" > etc/modules-load.d/early.conf
+
+          # User's exact repack
+          find . | cpio -H newc -o | xz -C crc32 -z -9e > "$FIXED_INITRD"
+
+          cd "$WORKDIR"
 
           xorriso -indev "$ISO_PATH" \
             -outdev "$PATCHED_ISO" \
@@ -252,7 +241,10 @@ jobs:
           mv -f "$PATCHED_ISO" "$ISO_PATH"
           implantisomd5 "$ISO_PATH"
           checkisomd5 --verbose "$ISO_PATH"
+          cp -f "$FIXED_INITRD" "$ARTIFACT_INITRD"
+          test -s "$ARTIFACT_INITRD"
           CONTAINER_SCRIPT
+
 
 
       - name: Move ISOs to Upload Directory
@@ -271,22 +263,15 @@ jobs:
           mv "${ISO_DIR}/${ISO_NAME}" "${ISO_DEST}"
           sha256sum "${ISO_DEST}" > "${ISO_DEST}-CHECKSUM"
 
-          docker run --rm \
-            --volume "${ISO_UPLOAD_DIR}:/artifacts" \
-            --env ISO_NAME="${ISO_NAME}" \
-            --env INITRD_NAME="${INITRD_NAME}" \
-            quay.io/fedora/fedora:43 \
-            bash -seuo pipefail <<'CONTAINER_SCRIPT'
-          dnf install -y xorriso
-          xorriso -osirrox on \
-            -indev "/artifacts/${ISO_NAME}" \
-            -extract /images/pxeboot/initrd.img "/artifacts/${INITRD_NAME}"
-          CONTAINER_SCRIPT
+          INITRD_SOURCE="${ISO_DIR}/${INITRD_NAME}"
+          test -s "${INITRD_SOURCE}"
+          mv "${INITRD_SOURCE}" "${ISO_UPLOAD_DIR}/${INITRD_NAME}"
 
           echo "iso-upload-dir=${ISO_UPLOAD_DIR}" >> "$GITHUB_OUTPUT"
           echo "iso-artifact-path=${ISO_DEST}" >> "$GITHUB_OUTPUT"
           echo "checksum-artifact-path=${ISO_DEST}-CHECKSUM" >> "$GITHUB_OUTPUT"
           echo "initrd-artifact-path=${ISO_UPLOAD_DIR}/${INITRD_NAME}" >> "$GITHUB_OUTPUT"
+
 
 
 
