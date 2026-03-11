@@ -284,6 +284,10 @@ jobs:
           CONTAINER_SCRIPT
 
           echo "iso-upload-dir=${ISO_UPLOAD_DIR}" >> "$GITHUB_OUTPUT"
+          echo "iso-artifact-path=${ISO_DEST}" >> "$GITHUB_OUTPUT"
+          echo "checksum-artifact-path=${ISO_DEST}-CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "initrd-artifact-path=${ISO_UPLOAD_DIR}/${INITRD_NAME}" >> "$GITHUB_OUTPUT"
+
 
 
 
@@ -294,11 +298,25 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.image_name }}-${{ steps.generate-tag.outputs.tag }}-${{ matrix.major_version}}
-          path: ${{ steps.upload-directory.outputs.iso-upload-dir }}
+          path: |
+            ${{ steps.upload-directory.outputs.iso-artifact-path }}
+            ${{ steps.upload-directory.outputs.checksum-artifact-path }}
           if-no-files-found: error
           retention-days: 0
           compression-level: 0
           overwrite: true
+
+      - name: Upload initrd to Job Artifacts
+        if: github.ref_name == 'testing' || github.ref_name == 'main'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: ${{ matrix.image_name }}-${{ steps.generate-tag.outputs.tag }}-${{ matrix.major_version}}-initrd
+          path: ${{ steps.upload-directory.outputs.initrd-artifact-path }}
+          if-no-files-found: error
+          retention-days: 0
+          compression-level: 0
+          overwrite: true
+
 
       - name: Upload ISOs and Checksum to R2
         if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
