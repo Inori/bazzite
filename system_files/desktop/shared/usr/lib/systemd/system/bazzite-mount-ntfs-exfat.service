@@ -1,0 +1,12 @@
+[Unit]
+Description=Auto-mount NTFS and exFAT volumes at boot
+Wants=systemd-udev-settle.service
+After=local-fs.target systemd-udev-settle.service
+ConditionPathExists=/usr/libexec/bazzite-mount-ntfs-exfat
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bazzite-mount-ntfs-exfat
+
+[Install]
+WantedBy=multi-user.target

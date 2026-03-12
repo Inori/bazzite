@@ -645,6 +645,7 @@ RUN --mount=type=cache,dst=/var/cache \
     ln -s /usr/bin/true /usr/bin/pulseaudio && \
     mkdir -p /etc/flatpak/remotes.d && \
     curl --retry 3 -Lo /etc/flatpak/remotes.d/flathub.flatpakrepo https://dl.flathub.org/repo/flathub.flatpakrepo && \
+    chmod +x /usr/libexec/bazzite-mount-ntfs-exfat && \
     systemctl enable brew-setup.service && \
     systemctl disable brew-upgrade.timer && \
     systemctl disable brew-update.timer && \
@@ -653,6 +654,7 @@ RUN --mount=type=cache,dst=/var/cache \
     systemctl disable scx_loader.service && \
     systemctl enable input-remapper.service && \
     systemctl enable bazzite-flatpak-manager.service && \
+    systemctl enable bazzite-mount-ntfs-exfat.service && \
     systemctl disable rpm-ostreed-automatic.timer && \
     systemctl enable uupd.timer && \
     systemctl enable incus-workaround.service && \
