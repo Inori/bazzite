@@ -1,0 +1,148 @@
+<%page args="root"/>
+<%
+import compileall
+import os
+import glob
+import pathlib
+import re
+
+# ==============================================================================
+# 手动修改 install tree 中的 Blivet 源码
+# 注意：最终 ISO 的 /images/pxeboot/initrd.img 由 build_iso.yml 在构建后单独修补。
+# ==============================================================================
+
+
+
+# 查找 blivet 目录 (在 install.img root 中)
+# 我们需要处理 root 前缀，并查找真实的 blivet 路径
+blivet_root = None
+search_paths = [
+    os.path.join(root, "usr/lib64/python3.*/site-packages/blivet"),
+    os.path.join(root, "usr/lib/python3.*/site-packages/blivet")
+]
+
+for pattern in search_paths:
+    found = glob.glob(pattern)
+    if found:
+        blivet_root = found[0]
+        break
+
+if not blivet_root:
+    print("ERROR: Could not find blivet directory in install tree!")
+    # 这里我们也可以抛出异常来终止构建
+    # raise RuntimeError("Blivet directory not found")
+else:
+    print(f"Found blivet at: {blivet_root}")
+
+    # --------------------------------------------------------------------------
+    # 2.1 修改 blivet/devices/loop.py
+    # --------------------------------------------------------------------------
+    loop_py_path = os.path.join(blivet_root, "devices/loop.py")
+    if os.path.exists(loop_py_path):
+        with open(loop_py_path, "r") as f:
+            content = f.read()
+        
+        # 目标: 修改 LoopDevice 类定义
+        # 原文:
+        # class LoopDevice(StorageDevice):
+        #     """ A loop device. """
+        #     _type = "loop"
+        #     _external_dependencies = ...
+        
+        # 替换为:
+        # class LoopDevice(StorageDevice):
+        #     """ A loop device.
+        #
+        #     Treated as a partitionable disk so that partition devices like
+        #     loopNp1/loopNp2 can be represented as normal PartitionDevice
+        #     instances (useful for loop-backed disk images).
+        #     """
+        #     _type = "loop"
+        #     _partitionable = True
+        #     _is_disk = True
+        #     _external_dependencies = ...
+        
+        # 使用简单的字符串替换。为了稳健，我们替换类头和 docstring。
+        old_str = '    """ A loop device. """\n    _type = "loop"'
+        new_str = '    """ A loop device.\n\n    Treated as a partitionable disk so that partition devices like\n    loopNp1/loopNp2 can be represented as normal PartitionDevice\n    instances (useful for loop-backed disk images).\n    """\n    _type = "loop"\n    _partitionable = True\n    _is_disk = True'
+        
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(loop_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/devices/loop.py")
+        else:
+            print("WARNING: Could not find target string in blivet/devices/loop.py. Patch may be already applied or file changed.")
+    else:
+        print(f"WARNING: {loop_py_path} does not exist.")
+
+
+    # --------------------------------------------------------------------------
+    # 2.2 修改 blivet/populator/helpers/loop.py
+    # --------------------------------------------------------------------------
+    helper_loop_py_path = os.path.join(blivet_root, "populator/helpers/loop.py")
+    if os.path.exists(helper_loop_py_path):
+        with open(helper_loop_py_path, "r") as f:
+            content = f.read()
+
+        # 目标: 修改 match 方法
+        # 原文:
+        #     @classmethod
+        #     def match(cls, data):
+        #         return udev.device_is_loop(data)
+        
+        # 替换为:
+        #     @classmethod
+        #     def match(cls, data):
+        #         """Match only whole loop devices, not their partitions.
+        #
+        #         For example, match "loop2", but let PartitionDevicePopulator
+        #         handle "loop2p1" etc.
+        #         """
+        #         return udev.device_is_loop(data) and not udev.device_is_partition(data)
+        
+        old_str = '    def match(cls, data):\n        return udev.device_is_loop(data)'
+        new_str = '    def match(cls, data):\n        """Match only whole loop devices, not their partitions.\n\n        For example, match "loop2", but let PartitionDevicePopulator\n        handle "loop2p1" etc.\n        """\n        return udev.device_is_loop(data) and not udev.device_is_partition(data)'
+
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(helper_loop_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/populator/helpers/loop.py")
+        else:
+            print("WARNING: Could not find target string in blivet/populator/helpers/loop.py.")
+
+    else:
+        print(f"WARNING: {helper_loop_py_path} does not exist.")
+
+
+    # --------------------------------------------------------------------------
+    # 2.3 修改 blivet/populator/helpers/partition.py (可选，增加 log)
+    # --------------------------------------------------------------------------
+    helper_part_py_path = os.path.join(blivet_root, "populator/helpers/partition.py")
+    if os.path.exists(helper_part_py_path):
+        with open(helper_part_py_path, "r") as f:
+            content = f.read()
+
+        # 目标: 在 return 之前增加 log.debug
+        # log.error("failure finding disk for %s", name)
+        # return
+        
+        old_str = '            log.error("failure finding disk for %s", name)\n            return'
+        new_str = '            log.error("failure finding disk for %s", name)\n            return\n\n        log.debug("PartitionDevicePopulator: parent disk %s, partitionable=%s, partitioned=%s, fmt=%s, fmt_supported=%s",\n                  disk.name, disk.partitionable, disk.partitioned,\n                  getattr(disk.format, "type", None), getattr(disk.format, "supported", None))'
+
+        if old_str in content:
+            new_content = content.replace(old_str, new_str)
+            with open(helper_part_py_path, "w") as f:
+                f.write(new_content)
+            print("Successfully patched blivet/populator/helpers/partition.py")
+        else:
+             print("WARNING: Could not find target string in blivet/populator/helpers/partition.py.")
+    else:
+        print(f"WARNING: {helper_part_py_path} does not exist.")
+
+    # 直接对 install tree 里的 blivet 重新编译字节码，避免依赖 runcmd 的宿主执行语义。
+    compileall.compile_dir(blivet_root, quiet=1, force=True)
+
+%>
+
