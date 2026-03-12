@@ -25,25 +25,25 @@ jobs:
           - bazzite
           - bazzite-nvidia
           - bazzite-nvidia-open
-          - bazzite-gnome
-          - bazzite-gnome-nvidia
-          - bazzite-gnome-nvidia-open
-          - bazzite-deck
-          - bazzite-deck-gnome
-          - bazzite-ally
-          - bazzite-ally-gnome
-          - bazzite-asus
-          - bazzite-gnome-asus
-          - bazzite-asus-nvidia
-          - bazzite-gnome-asus-nvidia
-          - bazzite-asus-nvidia-open
-          - bazzite-gnome-asus-nvidia-open
-          - bazzite-surface
-          - bazzite-gnome-surface
-          - bazzite-surface-nvidia-open
-          - bazzite-gnome-surface-nvidia-open
-          - bazzite-deck-nvidia
-          - bazzite-deck-nvidia-gnome
+          # - bazzite-gnome
+          # - bazzite-gnome-nvidia
+          # - bazzite-gnome-nvidia-open
+          # - bazzite-deck
+          # - bazzite-deck-gnome
+          # - bazzite-ally
+          # - bazzite-ally-gnome
+          # - bazzite-asus
+          # - bazzite-gnome-asus
+          # - bazzite-asus-nvidia
+          # - bazzite-gnome-asus-nvidia
+          # - bazzite-asus-nvidia-open
+          # - bazzite-gnome-asus-nvidia-open
+          # - bazzite-surface
+          # - bazzite-gnome-surface
+          # - bazzite-surface-nvidia-open
+          # - bazzite-gnome-surface-nvidia-open
+          # - bazzite-deck-nvidia
+          # - bazzite-deck-nvidia-gnome
         major_version: [41]
     steps:
 
@@ -144,8 +144,84 @@ jobs:
           flatpak_remote_refs_dir: ${{ steps.generate-flatpak-dir-shortname.outputs.flatpak-dir-shortname }}
           enable_flatpak_dependencies: "false"
           extra_boot_params: ${{ steps.generate-extra-params.outputs.extra-boot-params }}
-          additional_templates: '/github/workspace/installer/lorax_templates/remove_root_password_prompt.tmpl /github/workspace/installer/lorax_templates/set_default_user.tmpl'
+          additional_templates: '/github/workspace/installer/lorax_templates/remove_root_password_prompt.tmpl /github/workspace/installer/lorax_templates/set_default_user.tmpl /github/workspace/installer/lorax_templates/bazzite_patches.tmpl'
           repos: '/github/workspace/bazzite.repo /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo'
+
+      - name: Patch pxeboot initrd
+        shell: bash
+        run: |
+          set -xeuo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y cpio gzip isomd5sum xorriso xz-utils
+
+          ISO_DIR=$(readlink -f "${{ steps.build.outputs.iso_path }}")
+          ISO_NAME="${{ steps.build.outputs.iso_name }}"
+          OUTPUT_INITRD_NAME="${{ matrix.image_name }}-initrd.img"
+
+          WORKDIR=$(mktemp -d)
+          trap 'sudo rm -rf "$WORKDIR"' EXIT
+
+          ISO_PATH="${ISO_DIR}/${ISO_NAME}"
+          ORIG_INITRD="$WORKDIR/initrd.orig.img"
+          INITRD_WORK="$WORKDIR/initrd-work"
+          FIXED_INITRD="$WORKDIR/initrd.fixed.img"
+          ARTIFACT_INITRD="${ISO_DIR}/${OUTPUT_INITRD_NAME}"
+
+          PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
+
+          sudo xorriso -osirrox on -indev "$ISO_PATH" -extract /images/pxeboot/initrd.img "$ORIG_INITRD"
+
+          mkdir -p "$INITRD_WORK"
+          cd "$INITRD_WORK"
+
+          # User's exact manual extraction (run with sudo to successfully create device nodes)
+          sudo bash -c "xzcat '$ORIG_INITRD' | cpio -idmv"
+
+          # User's exact modification
+          if [ -e sbin/mount.ntfs ]; then
+            sudo mv sbin/mount.ntfs sbin/mount.ntfs.orig
+          fi
+          
+          sudo mkdir -p sbin
+          sudo bash -c "cat > sbin/mount.ntfs <<'EOF'
+          #!/bin/sh
+          # Redirect any \"mount -t ntfs\" to the in-kernel ntfs3 driver during initramfs.
+          # Try to locate a usable mount binary.
+          if command -v mount >/dev/null 2>&1; then
+            MNT=\"\$(command -v mount)\"
+          elif [ -x /usr/bin/mount ]; then
+            MNT=\"/usr/bin/mount\"
+          elif [ -x /bin/mount ]; then
+            MNT=\"/bin/mount\"
+          else
+            # Fallback: hope PATH resolves it
+            MNT=\"mount\"
+          fi
+          exec \"\$MNT\" -t ntfs3 \"\$@\"
+          EOF"
+
+          sudo chmod +x sbin/mount.ntfs
+
+          sudo mkdir -p etc/modules-load.d
+          sudo bash -c "printf 'ntfs3\nloop\niso9660\nsr_mod\n' > etc/modules-load.d/early.conf"
+
+          # User's exact repack (run with sudo to read device nodes)
+          sudo bash -c "find . | cpio -H newc -o | xz -C crc32 -z -9e > '$FIXED_INITRD'"
+
+          cd "$WORKDIR"
+
+          sudo xorriso -indev "$ISO_PATH" \
+            -outdev "$PATCHED_ISO" \
+            -map "$FIXED_INITRD" /images/pxeboot/initrd.img \
+            -boot_image any replay \
+            -commit
+
+          sudo mv -f "$PATCHED_ISO" "$ISO_PATH"
+          sudo implantisomd5 "$ISO_PATH"
+          sudo checkisomd5 --verbose "$ISO_PATH"
+          sudo cp -f "$FIXED_INITRD" "$ARTIFACT_INITRD"
+          test -s "$ARTIFACT_INITRD"
 
       - name: Move ISOs to Upload Directory
         id: upload-directory
