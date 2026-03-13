@@ -1,0 +1,32 @@
+name: Build Bazzite and ISOs
+
+on:
+  workflow_dispatch:
+    inputs:
+      handwritten:
+        description: "Small changelog:"
+        required: false
+        type: string
+      fresh-rechunk:
+        description: "Clear rechunk history"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}-oneclick
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    name: Build Bazzite
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      handwritten: ${{ inputs.handwritten }}
+      fresh-rechunk: ${{ inputs['fresh-rechunk'] }}
+
+  build-isos:
+    name: Build ISOs
+    needs: build-images
+    uses: ./.github/workflows/build_iso.yml
+    secrets: inherit
