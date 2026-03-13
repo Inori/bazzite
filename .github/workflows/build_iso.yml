@@ -173,7 +173,6 @@ jobs:
 
           ISO_DIR=$(readlink -f "${{ steps.build.outputs.iso_path }}")
           ISO_NAME="${{ steps.build.outputs.iso_name }}"
-          OUTPUT_INITRD_NAME="${{ matrix.image_name }}-initrd.img"
 
           WORKDIR=$(mktemp -d)
           trap 'sudo rm -rf "$WORKDIR"' EXIT
@@ -182,7 +181,6 @@ jobs:
           ORIG_INITRD="$WORKDIR/initrd.orig.img"
           INITRD_WORK="$WORKDIR/initrd-work"
           FIXED_INITRD="$WORKDIR/initrd.fixed.img"
-          ARTIFACT_INITRD="${ISO_DIR}/${OUTPUT_INITRD_NAME}"
 
           PATCHED_ISO="$WORKDIR/${ISO_NAME}.patched"
 
@@ -236,8 +234,6 @@ jobs:
           sudo mv -f "$PATCHED_ISO" "$ISO_PATH"
           sudo implantisomd5 "$ISO_PATH"
           sudo checkisomd5 --verbose "$ISO_PATH"
-          sudo cp -f "$FIXED_INITRD" "$ARTIFACT_INITRD"
-          test -s "$ARTIFACT_INITRD"
 
 
 
@@ -250,21 +246,15 @@ jobs:
           ISO_UPLOAD_DIR=${{ github.workspace }}/upload
           ISO_DIR=$(readlink -f "${{ steps.build.outputs.iso_path }}")
           ISO_NAME="${{ steps.build.outputs.iso_name }}"
-          INITRD_NAME="${{ matrix.image_name }}-initrd.img"
           ISO_DEST=${ISO_UPLOAD_DIR}/${ISO_NAME}
 
           mkdir -p "${ISO_UPLOAD_DIR}"
           mv "${ISO_DIR}/${ISO_NAME}" "${ISO_DEST}"
           sha256sum "${ISO_DEST}" > "${ISO_DEST}-CHECKSUM"
 
-          INITRD_SOURCE="${ISO_DIR}/${INITRD_NAME}"
-          test -s "${INITRD_SOURCE}"
-          mv "${INITRD_SOURCE}" "${ISO_UPLOAD_DIR}/${INITRD_NAME}"
-
           echo "iso-upload-dir=${ISO_UPLOAD_DIR}" >> "$GITHUB_OUTPUT"
           echo "iso-artifact-path=${ISO_DEST}" >> "$GITHUB_OUTPUT"
           echo "checksum-artifact-path=${ISO_DEST}-CHECKSUM" >> "$GITHUB_OUTPUT"
-          echo "initrd-artifact-path=${ISO_UPLOAD_DIR}/${INITRD_NAME}" >> "$GITHUB_OUTPUT"
 
 
 
@@ -280,17 +270,6 @@ jobs:
           path: |
             ${{ steps.upload-directory.outputs.iso-artifact-path }}
             ${{ steps.upload-directory.outputs.checksum-artifact-path }}
-          if-no-files-found: error
-          retention-days: 0
-          compression-level: 0
-          overwrite: true
-
-      - name: Upload initrd to Job Artifacts
-        if: github.ref_name == 'testing' || github.ref_name == 'main'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
-        with:
-          name: ${{ matrix.image_name }}-${{ steps.generate-tag.outputs.tag }}-${{ matrix.major_version}}-initrd
-          path: ${{ steps.upload-directory.outputs.initrd-artifact-path }}
           if-no-files-found: error
           retention-days: 0
           compression-level: 0
