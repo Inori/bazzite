@@ -1,0 +1,14 @@
+[Unit]
+Description=Prepare offline UMU runtime and Proton cache
+After=local-fs.target
+Before=systemd-user-sessions.service display-manager.service
+ConditionPathExists=/usr/libexec/bazzite-umu-offline-setup
+ConditionPathExists=/usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz
+ConditionPathExists=/usr/share/umu-offline-cache/GE-Proton10-28.tar.gz
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bazzite-umu-offline-setup
+
+[Install]
+WantedBy=multi-user.target

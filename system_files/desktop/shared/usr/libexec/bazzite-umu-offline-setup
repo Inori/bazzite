@@ -1,0 +1,91 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+CACHE_DIR="/usr/share/umu-offline-cache"
+STATE_ROOT="/var/lib/umu-offline"
+STATE_FILE="${STATE_ROOT}/.source-sha256"
+RUNTIME_ARCHIVE="${CACHE_DIR}/SteamLinuxRuntime_sniper.tar.xz"
+PROTON_ARCHIVE="${CACHE_DIR}/GE-Proton10-28.tar.gz"
+RUNTIME_NAME="SteamLinuxRuntime_sniper"
+PROTON_NAME="GE-Proton10-28"
+RUNTIME_DIR="${STATE_ROOT}/umu/steamrt3"
+UMU_COMPAT_DIR="${STATE_ROOT}/umu/compatibilitytools"
+STEAM_COMPAT_DIR="${STATE_ROOT}/Steam/compatibilitytools.d"
+PROTON_DIR="${STEAM_COMPAT_DIR}/${PROTON_NAME}"
+
+for archive in "$RUNTIME_ARCHIVE" "$PROTON_ARCHIVE"; do
+    if [[ ! -f "$archive" ]]; then
+        echo "Missing umu offline archive: $archive"
+        exit 0
+    fi
+done
+
+expected_state="$({ sha256sum "$RUNTIME_ARCHIVE"; sha256sum "$PROTON_ARCHIVE"; } | sha256sum | awk '{print $1}')"
+
+if [[ -f "$STATE_FILE" ]] && [[ "$(<"$STATE_FILE")" == "$expected_state" ]] && \
+   [[ -f "${RUNTIME_DIR}/.installed.ok" ]] && \
+   [[ -e "${RUNTIME_DIR}/umu" ]] && \
+   [[ -d "$PROTON_DIR" ]]; then
+    echo "umu offline assets already prepared."
+    exit 0
+fi
+
+tmpdir="$(mktemp -d /var/tmp/bazzite-umu-offline.XXXXXX)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+runtime_stage="${tmpdir}/steamrt3"
+proton_stage_root="${tmpdir}/proton"
+proton_stage_dir="${proton_stage_root}/${PROTON_NAME}"
+
+mkdir -p "$runtime_stage" "$proton_stage_root"
+
+echo "Extracting SteamLinuxRuntime sniper..."
+tar -xJf "$RUNTIME_ARCHIVE" -C "$tmpdir"
+if [[ ! -d "${tmpdir}/${RUNTIME_NAME}" ]]; then
+    echo "Expected runtime directory ${RUNTIME_NAME} was not found after extraction"
+    exit 1
+fi
+cp -a "${tmpdir}/${RUNTIME_NAME}/." "$runtime_stage/"
+
+if [[ ! -e "${runtime_stage}/_v2-entry-point" ]]; then
+    echo "Missing _v2-entry-point in extracted Steam runtime"
+    exit 1
+fi
+if [[ ! -d "${runtime_stage}/pressure-vessel" ]]; then
+    echo "Missing pressure-vessel in extracted Steam runtime"
+    exit 1
+fi
+if [[ ! -f "${runtime_stage}/VERSIONS.txt" ]]; then
+    echo "Missing VERSIONS.txt in extracted Steam runtime"
+    exit 1
+fi
+if [[ ! -f "${runtime_stage}/mtree.txt.gz" ]]; then
+    echo "Missing mtree.txt.gz in extracted Steam runtime"
+    exit 1
+fi
+if ! compgen -G "${runtime_stage}/sniper_platform_*" > /dev/null; then
+    echo "Missing sniper_platform_* directory in extracted Steam runtime"
+    exit 1
+fi
+: > "${runtime_stage}/.installed.ok"
+ln -sfn "_v2-entry-point" "${runtime_stage}/umu"
+
+
+echo "Extracting GE-Proton10-28..."
+tar -xzf "$PROTON_ARCHIVE" -C "$proton_stage_root"
+if [[ ! -d "$proton_stage_dir" ]]; then
+    echo "Expected proton directory ${PROTON_NAME} was not found after extraction"
+    exit 1
+fi
+
+install -d -m 0755 "${STATE_ROOT}/umu" "$UMU_COMPAT_DIR" "$STEAM_COMPAT_DIR"
+rm -rf "$RUNTIME_DIR"
+mv "$runtime_stage" "$RUNTIME_DIR"
+rm -rf "$PROTON_DIR"
+mv "$proton_stage_dir" "$PROTON_DIR"
+ln -sfn "../../Steam/compatibilitytools.d/${PROTON_NAME}" "${UMU_COMPAT_DIR}/${PROTON_NAME}"
+chmod -R a+rX "$RUNTIME_DIR" "$PROTON_DIR"
+printf '%s\n' "$expected_state" > "$STATE_FILE"
+
+echo "umu offline assets are ready in ${STATE_ROOT}."

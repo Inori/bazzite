@@ -349,9 +349,15 @@ RUN --mount=type=cache,dst=/var/cache \
     /ctx/ghcurl "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks" -Lo /usr/bin/winetricks && \
     chmod +x /usr/bin/winetricks && \
     setfattr -n user.component -v "winetricks" /usr/bin/winetricks && \
+    mkdir -p /usr/share/umu-offline-cache && \
+    curl --retry 3 -L -o /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz https://repo.steampowered.com/steamrt3/images/latest-container-runtime-public-beta/SteamLinuxRuntime_sniper.tar.xz && \
+    /ctx/ghcurl "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-28/GE-Proton10-28.tar.gz" -Lo /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
+    setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz && \
+    setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
     /ctx/cleanup
 
 # Install ujust-picker from GitHub releases
+
 RUN --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
@@ -580,13 +586,16 @@ RUN --mount=type=cache,dst=/var/cache \
     if [ -f /usr/libexec/bazzite-mount-ntfs-exfat ]; then \
         chmod +x /usr/libexec/bazzite-mount-ntfs-exfat; \
     fi && \
+    if [ -f /usr/libexec/bazzite-umu-offline-setup ]; then \
+        chmod +x /usr/libexec/bazzite-umu-offline-setup; \
+    fi && \
     systemctl enable brew-setup.service || true && \
     systemctl disable fw-fanctrl.service || true && \
     systemctl disable scx_loader.service || true && \
     systemctl enable input-remapper.service || true && \
     systemctl enable bazzite-flatpak-manager.service || true && \
     systemctl enable bazzite-mount-ntfs-exfat.service || true && \
-
+    systemctl enable bazzite-umu-offline-setup.service || true && \
     systemctl disable rpm-ostreed-automatic.timer || true && \
     systemctl enable uupd.timer || true && \
     systemctl enable incus-workaround.service || true && \
@@ -604,6 +613,7 @@ RUN --mount=type=cache,dst=/var/cache \
     systemctl enable greenboot-set-rollback-trigger.service || true && \
     systemctl disable force-wol.service || true && \
     systemctl --global enable bazzite-dynamic-fixes.service || true && \
+
     systemctl --global enable ntfs-nag.service || true && \
     /ctx/ghcurl "https://raw.githubusercontent.com/doitsujin/dxvk/master/dxvk.conf" -Lo /etc/dxvk-example.conf && \
     # /ctx/ghcurl "https://raw.githubusercontent.com/ublue-os/waydroid-scripts/main/waydroid-choose-gpu.sh" -Lo /usr/bin/waydroid-choose-gpu && \
