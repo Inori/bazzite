@@ -1,5 +1,6 @@
 [Unit]
-Description=Prepare offline UMU runtime and Proton cache
+Description=Prepare offline UMU runtime and Proton assets for local users
+
 After=local-fs.target
 Before=systemd-user-sessions.service display-manager.service
 ConditionPathExists=/usr/libexec/bazzite-umu-offline-setup

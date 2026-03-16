@@ -3,16 +3,119 @@
 set -euo pipefail
 
 CACHE_DIR="/usr/share/umu-offline-cache"
-STATE_ROOT="/var/lib/umu-offline"
-STATE_FILE="${STATE_ROOT}/.source-sha256"
 RUNTIME_ARCHIVE="${CACHE_DIR}/SteamLinuxRuntime_sniper.tar.xz"
 PROTON_ARCHIVE="${CACHE_DIR}/GE-Proton10-28.tar.gz"
 RUNTIME_NAME="SteamLinuxRuntime_sniper"
 PROTON_NAME="GE-Proton10-28"
-RUNTIME_DIR="${STATE_ROOT}/umu/steamrt3"
-UMU_COMPAT_DIR="${STATE_ROOT}/umu/compatibilitytools"
-STEAM_COMPAT_DIR="${STATE_ROOT}/Steam/compatibilitytools.d"
-PROTON_DIR="${STEAM_COMPAT_DIR}/${PROTON_NAME}"
+WORKDIR="$(mktemp -d /var/tmp/bazzite-umu-offline.XXXXXX)"
+
+RUNTIME_STAGE="${WORKDIR}/steamrt3"
+PROTON_STAGE_ROOT="${WORKDIR}/proton"
+PROTON_STAGE_DIR="${PROTON_STAGE_ROOT}/${PROTON_NAME}"
+USER_COUNT=0
+
+trap 'rm -rf "$WORKDIR"' EXIT
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "Missing required command: $1"
+        exit 1
+    }
+}
+
+write_shim() {
+    local file_path="$1"
+
+    cat > "$file_path" <<'EOF'
+#!/bin/sh
+
+if [ "${XDG_CURRENT_DESKTOP}" = "gamescope" ] || [ "${XDG_SESSION_DESKTOP}" = "gamescope" ]; then
+    if [ "${STEAM_MULTIPLE_XWAYLANDS}" = "1" ] && [ -z "${DISPLAY}" ]; then
+        export DISPLAY=":1"
+    fi
+fi
+
+exec "$@"
+EOF
+
+    chmod 0700 "$file_path"
+}
+
+prepare_payload() {
+    mkdir -p "$RUNTIME_STAGE" "$PROTON_STAGE_ROOT"
+
+    echo "Extracting SteamLinuxRuntime sniper..."
+    tar -xJf "$RUNTIME_ARCHIVE" -C "$WORKDIR"
+    if [[ ! -d "${WORKDIR}/${RUNTIME_NAME}" ]]; then
+        echo "Expected runtime directory ${RUNTIME_NAME} was not found after extraction"
+        exit 1
+    fi
+    cp -a "${WORKDIR}/${RUNTIME_NAME}/." "$RUNTIME_STAGE/"
+
+    [[ -d "${RUNTIME_STAGE}/pressure-vessel" ]] || { echo "Missing pressure-vessel in extracted Steam runtime"; exit 1; }
+    [[ -f "${RUNTIME_STAGE}/VERSIONS.txt" ]] || { echo "Missing VERSIONS.txt in extracted Steam runtime"; exit 1; }
+    [[ -f "${RUNTIME_STAGE}/mtree.txt.gz" ]] || { echo "Missing mtree.txt.gz in extracted Steam runtime"; exit 1; }
+    compgen -G "${RUNTIME_STAGE}/sniper_platform_*" >/dev/null || { echo "Missing sniper_platform_* directory in extracted Steam runtime"; exit 1; }
+    [[ -f "${RUNTIME_STAGE}/_v2-entry-point" ]] || { echo "Missing _v2-entry-point in extracted Steam runtime"; exit 1; }
+
+    mv "${RUNTIME_STAGE}/_v2-entry-point" "${RUNTIME_STAGE}/umu"
+    chmod 0755 "${RUNTIME_STAGE}/umu"
+    write_shim "${RUNTIME_STAGE}/umu-shim"
+    : > "${RUNTIME_STAGE}/.installed.ok"
+
+    echo "Extracting GE-Proton10-28..."
+    tar -xzf "$PROTON_ARCHIVE" -C "$PROTON_STAGE_ROOT"
+    if [[ ! -d "$PROTON_STAGE_DIR" ]]; then
+        echo "Expected proton directory ${PROTON_NAME} was not found after extraction"
+        exit 1
+    fi
+
+    [[ -f "${PROTON_STAGE_DIR}/toolmanifest.vdf" ]] || { echo "Missing toolmanifest.vdf in extracted Proton"; exit 1; }
+    [[ -f "${PROTON_STAGE_DIR}/compatibilitytool.vdf" ]] || { echo "Missing compatibilitytool.vdf in extracted Proton"; exit 1; }
+    [[ -x "${PROTON_STAGE_DIR}/proton" ]] || { echo "Missing proton executable in extracted Proton"; exit 1; }
+
+    chmod -R a+rX "$RUNTIME_STAGE" "$PROTON_STAGE_DIR"
+}
+
+install_for_user() {
+    local user="$1"
+    local uid="$2"
+    local gid="$3"
+    local home="$4"
+    local target_xdg_data_home="${home}/.local/share"
+    local umu_local="${target_xdg_data_home}/umu"
+    local umu_compat_dir="${umu_local}/compatibilitytools"
+    local steam_compat_dir="${target_xdg_data_home}/Steam/compatibilitytools.d"
+    local runtime_dir="${umu_local}/steamrt3"
+    local proton_dir="${steam_compat_dir}/${PROTON_NAME}"
+    local state_file="${umu_local}/.offline-source-sha256"
+
+    install -d -m 0755 "$umu_local" "$umu_compat_dir" "$steam_compat_dir"
+
+    if [[ -f "$state_file" ]] && [[ "$(<"$state_file")" == "$EXPECTED_STATE" ]] && \
+       [[ -f "${runtime_dir}/.installed.ok" ]] && \
+       [[ -x "${runtime_dir}/umu" ]] && \
+       [[ -x "${runtime_dir}/umu-shim" ]] && \
+       [[ -f "${proton_dir}/toolmanifest.vdf" ]] && \
+       [[ -f "${proton_dir}/compatibilitytool.vdf" ]] && \
+       [[ -x "${proton_dir}/proton" ]]; then
+        echo "umu offline assets already prepared for ${user}."
+        write_shim "${runtime_dir}/umu-shim"
+        chown -R "$uid:$gid" "$umu_local" "$steam_compat_dir"
+        return 0
+    fi
+
+
+    echo "Installing umu offline assets for ${user} (${home})..."
+
+    rm -rf "$runtime_dir" "$proton_dir" "${umu_compat_dir:?}/${PROTON_NAME}"
+    cp -a "$RUNTIME_STAGE" "$runtime_dir"
+    cp -a "$PROTON_STAGE_DIR" "$proton_dir"
+    ln -sfn "../../Steam/compatibilitytools.d/${PROTON_NAME}" "${umu_compat_dir}/${PROTON_NAME}"
+    printf '%s\n' "$EXPECTED_STATE" > "$state_file"
+
+    chown -R "$uid:$gid" "$umu_local" "$steam_compat_dir"
+}
 
 for archive in "$RUNTIME_ARCHIVE" "$PROTON_ARCHIVE"; do
     if [[ ! -f "$archive" ]]; then
@@ -21,71 +124,34 @@ for archive in "$RUNTIME_ARCHIVE" "$PROTON_ARCHIVE"; do
     fi
 done
 
-expected_state="$({ sha256sum "$RUNTIME_ARCHIVE"; sha256sum "$PROTON_ARCHIVE"; } | sha256sum | awk '{print $1}')"
+EXPECTED_STATE="$({ sha256sum "$RUNTIME_ARCHIVE"; sha256sum "$PROTON_ARCHIVE"; } | sha256sum | awk '{print $1}')"
 
-if [[ -f "$STATE_FILE" ]] && [[ "$(<"$STATE_FILE")" == "$expected_state" ]] && \
-   [[ -f "${RUNTIME_DIR}/.installed.ok" ]] && \
-   [[ -e "${RUNTIME_DIR}/umu" ]] && \
-   [[ -d "$PROTON_DIR" ]]; then
-    echo "umu offline assets already prepared."
+for cmd in awk cat chmod chown cp getent install mkdir mktemp mv rm sha256sum tar; do
+
+    need_cmd "$cmd"
+done
+
+prepare_payload
+
+while IFS=: read -r user _ uid gid _ home shell; do
+    [[ "$uid" =~ ^[0-9]+$ ]] || continue
+    (( uid >= 1000 )) || continue
+    [[ "$uid" -ne 65534 ]] || continue
+    [[ -d "$home" ]] || continue
+
+    case "$shell" in
+        ""|*/nologin|*/false)
+            continue
+            ;;
+    esac
+
+    install_for_user "$user" "$uid" "$gid" "$home"
+    USER_COUNT=$((USER_COUNT + 1))
+done < <(getent passwd)
+
+if [[ "$USER_COUNT" -eq 0 ]]; then
+    echo "No eligible local users found for umu offline setup."
     exit 0
 fi
 
-tmpdir="$(mktemp -d /var/tmp/bazzite-umu-offline.XXXXXX)"
-trap 'rm -rf "$tmpdir"' EXIT
-
-runtime_stage="${tmpdir}/steamrt3"
-proton_stage_root="${tmpdir}/proton"
-proton_stage_dir="${proton_stage_root}/${PROTON_NAME}"
-
-mkdir -p "$runtime_stage" "$proton_stage_root"
-
-echo "Extracting SteamLinuxRuntime sniper..."
-tar -xJf "$RUNTIME_ARCHIVE" -C "$tmpdir"
-if [[ ! -d "${tmpdir}/${RUNTIME_NAME}" ]]; then
-    echo "Expected runtime directory ${RUNTIME_NAME} was not found after extraction"
-    exit 1
-fi
-cp -a "${tmpdir}/${RUNTIME_NAME}/." "$runtime_stage/"
-
-if [[ ! -e "${runtime_stage}/_v2-entry-point" ]]; then
-    echo "Missing _v2-entry-point in extracted Steam runtime"
-    exit 1
-fi
-if [[ ! -d "${runtime_stage}/pressure-vessel" ]]; then
-    echo "Missing pressure-vessel in extracted Steam runtime"
-    exit 1
-fi
-if [[ ! -f "${runtime_stage}/VERSIONS.txt" ]]; then
-    echo "Missing VERSIONS.txt in extracted Steam runtime"
-    exit 1
-fi
-if [[ ! -f "${runtime_stage}/mtree.txt.gz" ]]; then
-    echo "Missing mtree.txt.gz in extracted Steam runtime"
-    exit 1
-fi
-if ! compgen -G "${runtime_stage}/sniper_platform_*" > /dev/null; then
-    echo "Missing sniper_platform_* directory in extracted Steam runtime"
-    exit 1
-fi
-: > "${runtime_stage}/.installed.ok"
-ln -sfn "_v2-entry-point" "${runtime_stage}/umu"
-
-
-echo "Extracting GE-Proton10-28..."
-tar -xzf "$PROTON_ARCHIVE" -C "$proton_stage_root"
-if [[ ! -d "$proton_stage_dir" ]]; then
-    echo "Expected proton directory ${PROTON_NAME} was not found after extraction"
-    exit 1
-fi
-
-install -d -m 0755 "${STATE_ROOT}/umu" "$UMU_COMPAT_DIR" "$STEAM_COMPAT_DIR"
-rm -rf "$RUNTIME_DIR"
-mv "$runtime_stage" "$RUNTIME_DIR"
-rm -rf "$PROTON_DIR"
-mv "$proton_stage_dir" "$PROTON_DIR"
-ln -sfn "../../Steam/compatibilitytools.d/${PROTON_NAME}" "${UMU_COMPAT_DIR}/${PROTON_NAME}"
-chmod -R a+rX "$RUNTIME_DIR" "$PROTON_DIR"
-printf '%s\n' "$expected_state" > "$STATE_FILE"
-
-echo "umu offline assets are ready in ${STATE_ROOT}."
+echo "umu offline assets are ready for ${USER_COUNT} user(s)."
