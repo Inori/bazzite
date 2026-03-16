@@ -46,11 +46,34 @@ systemctl enable ublue-nvctk-cdi.service
 semodule --verbose --install /usr/share/selinux/packages/nvidia-container.pp
 
 # Universal Blue specific Initramfs fixes
-cp /etc/modprobe.d/nvidia-modeset.conf /usr/lib/modprobe.d/nvidia-modeset.conf
-# we must force driver load to fix black screen on boot for nvidia desktops
-sed -i 's@omit_drivers@force_drivers@g' /usr/lib/dracut/dracut.conf.d/99-nvidia.conf
-# as we need forced load, also mustpre-load intel/amd iGPU else chromium web browsers fail to use hardware acceleration
-sed -i 's@ nvidia @ i915 amdgpu nvidia @g' /usr/lib/dracut/dracut.conf.d/99-nvidia.conf
+if [[ -f /etc/modprobe.d/nvidia-modeset.conf ]]; then
+    install -Dpm0644 /etc/modprobe.d/nvidia-modeset.conf /usr/lib/modprobe.d/nvidia-modeset.conf
+elif [[ -f /usr/lib/modprobe.d/nvidia-modeset.conf ]]; then
+    echo "Using existing /usr/lib/modprobe.d/nvidia-modeset.conf"
+else
+    install -Dpm0644 /dev/null /usr/lib/modprobe.d/nvidia-modeset.conf
+    cat <<'EOF' > /usr/lib/modprobe.d/nvidia-modeset.conf
+# Nvidia modesetting support. Set to 0 or comment to disable kernel modesetting
+# support. This must be disabled in case of SLI Mosaic.
+
+options nvidia-drm modeset=1
+EOF
+fi
+
+if [[ -f /usr/lib/dracut/dracut.conf.d/99-nvidia.conf ]]; then
+    echo "Using existing /usr/lib/dracut/dracut.conf.d/99-nvidia.conf"
+else
+    install -Dpm0644 /dev/null /usr/lib/dracut/dracut.conf.d/99-nvidia.conf
+    cat <<'EOF' > /usr/lib/dracut/dracut.conf.d/99-nvidia.conf
+# Omit the i915 amdgpu nvidia driver from the ramdisk, to avoid needing to regenerate
+# the ramdisk on updates.
+force_drivers+=" i915 amdgpu nvidia nvidia_drm nvidia_modeset nvidia_peermem nvidia_uvm "
+EOF
+fi
+
+
+
+
 
 # Awful hack of an install method to restore VK_hdr_layer in a way that won't randomly break for the foreseeable future.
 PKG="VK_hdr_layer"
