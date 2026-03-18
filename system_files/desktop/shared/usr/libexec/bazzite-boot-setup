@@ -1,0 +1,330 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+BASE_MOUNT_DIR="/run/media/bazzite-auto"
+LAUNCHER_ARCHIVE="/usr/share/bazzite/games/df-launcher.7z"
+LAUNCHER_NAME="df-launcher"
+LAUNCHER_EXE_NAME="delta_force_launcher.exe"
+UMU_RUN_BIN="/usr/bin/umu-run"
+UMU_GAMEID="umu-default"
+UMU_RUNTIME_NAME="steamrt3"
+UMU_PROTON_NAME="GE-Proton10-28"
+
+PRIMARY_USER=""
+PRIMARY_UID="1000"
+PRIMARY_GID="1000"
+PRIMARY_HOME=""
+PRIMARY_DESKTOP_DIR=""
+
+DF_LAUNCHER_DIR=""
+DF_LAUNCHER_EXE_PATH=""
+DELTAFORCE_GAME_EXE_PATH=""
+DELTAFORCE_BINARY_DIR=""
+DELTAFORCE_INSTALL_ROOT=""
+DELTAFORCE_WINDOWS_INSTALL_PATH=""
+DELTAFORCE_WINDOWS_SETUP_PATH=""
+declare -a MOUNTED_DIRS=()
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "Missing required command: $1"
+        exit 1
+    }
+}
+
+sanitize_name() {
+    local value="$1"
+    value="$(printf '%s' "$value" | tr -cs '[:alnum:]._-' '_')"
+    value="${value#_}"
+    value="${value%_}"
+    printf '%s' "${value:-volume}"
+}
+
+register_mounted_dir() {
+    local dir="$1"
+    local existing
+
+    [[ -n "$dir" ]] || return 0
+    [[ -d "$dir" ]] || return 0
+
+    for existing in "${MOUNTED_DIRS[@]}"; do
+        [[ "$existing" == "$dir" ]] && return 0
+    done
+
+    MOUNTED_DIRS+=("$dir")
+}
+
+resolve_primary_user() {
+    local record
+
+    record="$(awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { print; exit }' /etc/passwd || true)"
+    [[ -n "$record" ]] || return 0
+
+    IFS=: read -r PRIMARY_USER _ PRIMARY_UID PRIMARY_GID _ PRIMARY_HOME _ <<< "$record"
+}
+
+resolve_desktop_dir() {
+    local home_dir="$1"
+    local user_dirs_file="${home_dir}/.config/user-dirs.dirs"
+    local desktop_dir
+
+    if [[ -r "$user_dirs_file" ]]; then
+        desktop_dir="$(awk -F= '/^XDG_DESKTOP_DIR=/{print $2; exit}' "$user_dirs_file" | tr -d '"' || true)"
+        if [[ -n "$desktop_dir" ]]; then
+            desktop_dir="${desktop_dir//\$HOME/$home_dir}"
+            printf '%s\n' "$desktop_dir"
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "${home_dir}/Desktop"
+}
+
+desktop_escape_exec_arg() {
+    local value="$1"
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "$value"
+}
+
+linux_path_to_wine_path() {
+    local value="$1"
+
+    value="${value//\//\\}"
+    printf 'Z:%s' "$value"
+}
+
+resolve_launcher_exe_path() {
+    find "$DF_LAUNCHER_DIR" -type f -iname "$LAUNCHER_EXE_NAME" -print -quit 2>/dev/null || true
+}
+
+compute_deltaforce_registry_paths() {
+    if [[ "$DELTAFORCE_GAME_EXE_PATH" == */DeltaForce/Binaries/Win64/DeltaForceClient-Win64-Shipping.exe ]]; then
+        DELTAFORCE_INSTALL_ROOT="${DELTAFORCE_GAME_EXE_PATH%/DeltaForce/Binaries/Win64/DeltaForceClient-Win64-Shipping.exe}"
+    else
+        DELTAFORCE_INSTALL_ROOT="$DELTAFORCE_BINARY_DIR"
+    fi
+
+    DELTAFORCE_WINDOWS_INSTALL_PATH="$(linux_path_to_wine_path "$DELTAFORCE_INSTALL_ROOT")"
+    DELTAFORCE_WINDOWS_SETUP_PATH="$(linux_path_to_wine_path "$DELTAFORCE_GAME_EXE_PATH")"
+}
+
+# part 1: mount ntfs/exfat disks
+part_1_mount_ntfs_exfat_disks() {
+    local dev type fstype uuid label mountpoint existing_mount name_source safe_name target_dir index opts
+
+    mkdir -p "$BASE_MOUNT_DIR"
+
+    while IFS=$'\t' read -r dev type fstype uuid label mountpoint; do
+        [[ -z "$dev" || -z "$fstype" ]] && continue
+
+        case "$type" in
+            part|disk) ;;
+            *) continue ;;
+        esac
+
+        case "$fstype" in
+            ntfs|ntfs3|exfat) ;;
+            *) continue ;;
+        esac
+
+        existing_mount="$(findmnt -rn -S "$dev" -o TARGET 2>/dev/null | head -n1 || true)"
+        if [[ -n "$existing_mount" ]]; then
+            if [[ "$existing_mount" == "$BASE_MOUNT_DIR"/* ]]; then
+                register_mounted_dir "$existing_mount"
+            fi
+            continue
+        fi
+
+        [[ -n "$mountpoint" ]] && continue
+
+        name_source="$label"
+        [[ -n "$name_source" ]] || name_source="$uuid"
+        [[ -n "$name_source" ]] || name_source="${dev##*/}"
+
+        safe_name="$(sanitize_name "$name_source")"
+        target_dir="$BASE_MOUNT_DIR/$safe_name"
+        index=1
+        while [[ -e "$target_dir" ]] && ! mountpoint -q "$target_dir"; do
+            target_dir="$BASE_MOUNT_DIR/${safe_name}_$index"
+            index=$((index + 1))
+        done
+
+        mkdir -p "$target_dir"
+
+        if [[ "$fstype" == "exfat" ]]; then
+            opts="rw,uid=${PRIMARY_UID},gid=${PRIMARY_GID},umask=022"
+            if mount -t exfat -o "$opts" "$dev" "$target_dir"; then
+                register_mounted_dir "$target_dir"
+            else
+                rmdir "$target_dir" 2>/dev/null || true
+            fi
+        else
+            opts="rw,uid=${PRIMARY_UID},gid=${PRIMARY_GID},umask=022,windows_names"
+            if mount -t ntfs3 -o "$opts" "$dev" "$target_dir"; then
+                register_mounted_dir "$target_dir"
+            else
+                rmdir "$target_dir" 2>/dev/null || true
+            fi
+        fi
+    done < <(
+        lsblk -Jpo NAME,TYPE,FSTYPE,UUID,LABEL,MOUNTPOINT \
+          | jq -r '.. | objects | select(has("name")) | [(.name // ""), (.type // ""), (.fstype // ""), (.uuid // ""), (.label // ""), (.mountpoint // "")] | @tsv'
+    )
+}
+
+# part 2: unpack df-launcher into ~/Games
+part_2_install_df_launcher() {
+    local games_dir state_file expected_state
+
+    [[ -n "$PRIMARY_HOME" ]] || return 0
+    [[ -f "$LAUNCHER_ARCHIVE" ]] || {
+        echo "Missing Delta Force launcher archive: $LAUNCHER_ARCHIVE"
+        exit 1
+    }
+
+    games_dir="${PRIMARY_HOME}/Games"
+    DF_LAUNCHER_DIR="${games_dir}/${LAUNCHER_NAME}"
+    state_file="${games_dir}/.${LAUNCHER_NAME}-source-sha256"
+    expected_state="$(sha256sum "$LAUNCHER_ARCHIVE" | awk '{print $1}')"
+
+    install -d -m 0755 -o "$PRIMARY_UID" -g "$PRIMARY_GID" "$games_dir"
+
+    if [[ -f "$state_file" ]] && [[ "$(<"$state_file")" == "$expected_state" ]] && [[ -d "$DF_LAUNCHER_DIR" ]]; then
+        DF_LAUNCHER_EXE_PATH="$(resolve_launcher_exe_path)"
+        if [[ -n "$DF_LAUNCHER_EXE_PATH" ]]; then
+            echo "Delta Force launcher already prepared at ${DF_LAUNCHER_DIR}."
+            return 0
+        fi
+    fi
+
+    echo "Extracting Delta Force launcher into ${DF_LAUNCHER_DIR}..."
+    rm -rf "$DF_LAUNCHER_DIR"
+    install -d -m 0755 -o "$PRIMARY_UID" -g "$PRIMARY_GID" "$DF_LAUNCHER_DIR"
+    7z x -y "-o${DF_LAUNCHER_DIR}" "$LAUNCHER_ARCHIVE" >/dev/null
+
+    DF_LAUNCHER_EXE_PATH="$(resolve_launcher_exe_path)"
+    [[ -n "$DF_LAUNCHER_EXE_PATH" ]] || {
+        echo "Unable to find ${LAUNCHER_EXE_NAME} after extracting ${LAUNCHER_ARCHIVE}"
+        exit 1
+    }
+
+    printf '%s\n' "$expected_state" > "$state_file"
+    chown -R "$PRIMARY_UID:$PRIMARY_GID" "$DF_LAUNCHER_DIR" "$state_file"
+}
+
+# part 3: search mounted disks for Delta Force install
+part_3_find_deltaforce_install_dir() {
+    local mount_dir exe_path candidate_dir
+
+    for mount_dir in "${MOUNTED_DIRS[@]}"; do
+        while IFS= read -r -d '' exe_path; do
+            candidate_dir="${exe_path%/*}"
+            if [[ -f "${candidate_dir}/DeltaForceClient-Win64-ShippingBase.dll" ]] && \
+               [[ -d "${candidate_dir}/AntiCheatExpert" ]]; then
+                DELTAFORCE_GAME_EXE_PATH="$exe_path"
+                DELTAFORCE_BINARY_DIR="$candidate_dir"
+                compute_deltaforce_registry_paths
+                echo "Found Delta Force install at ${DELTAFORCE_BINARY_DIR}."
+                return 0
+            fi
+        done < <(find "$mount_dir" -type f -name 'DeltaForceClient-Win64-Shipping.exe' -print0 2>/dev/null)
+    done
+
+    return 1
+}
+
+# part 4: import Delta Force registry values into the umu prefix
+part_4_import_deltaforce_registry() {
+    local prefix_dir
+
+    prefix_dir="${PRIMARY_HOME}/Games/umu/${UMU_GAMEID}"
+    install -d -m 0755 -o "$PRIMARY_UID" -g "$PRIMARY_GID" "${PRIMARY_HOME}/Games" "$prefix_dir"
+
+    echo "Importing Delta Force registry values into ${prefix_dir}..."
+    runuser -u "$PRIMARY_USER" -- \
+        env HOME="$PRIMARY_HOME" USER="$PRIMARY_USER" LOGNAME="$PRIMARY_USER" \
+        UMU_RUNTIME_UPDATE=0 RUNTIMEPATH="$UMU_RUNTIME_NAME" PROTONPATH="$UMU_PROTON_NAME" \
+        GAMEID="$UMU_GAMEID" WINEPREFIX="$prefix_dir" \
+        "$UMU_RUN_BIN" reg.exe ADD 'HKCU\SOFTWARE\Rail\Dfmclient-Win64-Test' /v InstallPath /t REG_SZ /d "$DELTAFORCE_WINDOWS_INSTALL_PATH" /f
+
+    runuser -u "$PRIMARY_USER" -- \
+        env HOME="$PRIMARY_HOME" USER="$PRIMARY_USER" LOGNAME="$PRIMARY_USER" \
+        UMU_RUNTIME_UPDATE=0 RUNTIMEPATH="$UMU_RUNTIME_NAME" PROTONPATH="$UMU_PROTON_NAME" \
+        GAMEID="$UMU_GAMEID" WINEPREFIX="$prefix_dir" \
+        "$UMU_RUN_BIN" reg.exe ADD 'HKCU\SOFTWARE\Rail\Dfmclient-Win64-Test' /v setup /t REG_SZ /d "$DELTAFORCE_WINDOWS_SETUP_PATH" /f
+
+    runuser -u "$PRIMARY_USER" -- \
+        env HOME="$PRIMARY_HOME" USER="$PRIMARY_USER" LOGNAME="$PRIMARY_USER" \
+        UMU_RUNTIME_UPDATE=0 RUNTIMEPATH="$UMU_RUNTIME_NAME" PROTONPATH="$UMU_PROTON_NAME" \
+        GAMEID="$UMU_GAMEID" WINEPREFIX="$prefix_dir" \
+        "$UMU_RUN_BIN" reg.exe ADD 'HKCU\SOFTWARE\Rail\Dfmclient-Win64-Test' /v setup_x64 /t REG_SZ /d '' /f
+}
+
+# part 5: create or refresh DeltaForce desktop shortcut
+part_5_create_deltaforce_desktop_shortcut() {
+    local desktop_file escaped_exe_path expected_exec expected_path
+
+    [[ -n "$PRIMARY_USER" ]] || return 0
+    [[ -n "$PRIMARY_HOME" ]] || return 0
+    [[ -n "$DF_LAUNCHER_EXE_PATH" ]] || return 0
+
+    [[ -n "$PRIMARY_DESKTOP_DIR" ]] || PRIMARY_DESKTOP_DIR="$(resolve_desktop_dir "$PRIMARY_HOME")"
+    install -d -m 0755 -o "$PRIMARY_UID" -g "$PRIMARY_GID" "$PRIMARY_DESKTOP_DIR"
+
+    escaped_exe_path="$(desktop_escape_exec_arg "$DF_LAUNCHER_EXE_PATH")"
+    desktop_file="${PRIMARY_DESKTOP_DIR}/DeltaForce.desktop"
+    expected_exec="Exec=env UMU_RUNTIME_UPDATE=0 RUNTIMEPATH=${UMU_RUNTIME_NAME} PROTONPATH=${UMU_PROTON_NAME} GAMEID=${UMU_GAMEID} WINEPREFIX=${PRIMARY_HOME}/Games/umu/${UMU_GAMEID} umu-run \"${escaped_exe_path}\""
+    expected_path="Path=${DF_LAUNCHER_DIR}"
+
+    if [[ -f "$desktop_file" ]] && grep -Fqx "$expected_exec" "$desktop_file" && grep -Fqx "$expected_path" "$desktop_file"; then
+        echo "DeltaForce desktop shortcut already up to date at ${desktop_file}."
+        return 0
+    fi
+
+    cat > "$desktop_file" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DeltaForce
+Comment=Launch Delta Force launcher with umu-run
+Exec=env UMU_RUNTIME_UPDATE=0 RUNTIMEPATH=${UMU_RUNTIME_NAME} PROTONPATH=${UMU_PROTON_NAME} GAMEID=${UMU_GAMEID} WINEPREFIX=${PRIMARY_HOME}/Games/umu/${UMU_GAMEID} umu-run "$escaped_exe_path"
+Path=${DF_LAUNCHER_DIR}
+Terminal=false
+Categories=Game;
+StartupNotify=true
+EOF
+
+    chmod 0755 "$desktop_file"
+    chown "$PRIMARY_UID:$PRIMARY_GID" "$desktop_file"
+    chown "$PRIMARY_UID:$PRIMARY_GID" "$PRIMARY_DESKTOP_DIR"
+
+    echo "Created DeltaForce desktop shortcut at ${desktop_file}."
+}
+
+main() {
+    for cmd in 7z awk cat chmod chown find findmnt grep head install jq lsblk mkdir mount mountpoint rm rmdir runuser sha256sum tr umu-run; do
+        need_cmd "$cmd"
+    done
+
+    resolve_primary_user
+    if [[ -z "$PRIMARY_USER" || -z "$PRIMARY_HOME" ]]; then
+        echo "No eligible local desktop user found for boot setup."
+        exit 0
+    fi
+
+    PRIMARY_DESKTOP_DIR="$(resolve_desktop_dir "$PRIMARY_HOME")"
+
+    part_1_mount_ntfs_exfat_disks
+    part_2_install_df_launcher
+
+    if part_3_find_deltaforce_install_dir; then
+        part_4_import_deltaforce_registry
+        part_5_create_deltaforce_desktop_shortcut
+    else
+        echo "No Delta Force install found on auto-mounted NTFS/exFAT disks."
+    fi
+}
+
+main "$@"

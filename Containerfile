@@ -62,6 +62,7 @@ RUN --mount=type=bind,target=/tmp/context \
 
 COPY firmware /
 
+
 # Copy Homebrew files from the brew image
 ARG BREW_IMAGE=ghcr.io/ublue-os/brew:latest@sha256:ca91068f51ce663d495ccfc829352d6621ec95f6c7db447ade55023b222f9762
 RUN --mount=type=bind,from=${BREW_IMAGE},source=/system_files,target=/tmp/brew_source \
@@ -349,8 +350,12 @@ RUN --mount=type=cache,dst=/var/cache \
     /ctx/ghcurl "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks" -Lo /usr/bin/winetricks && \
     chmod +x /usr/bin/winetricks && \
     setfattr -n user.component -v "winetricks" /usr/bin/winetricks && \
-    mkdir -p /usr/share/umu-offline-cache && \
+    mkdir -p /usr/share/bazzite/games /usr/share/umu-offline-cache && \
+    curl --retry 3 -L -o /usr/share/bazzite/games/df-launcher.7z https://coscdnsintl-1251626029.cos.ap-hongkong.myqcloud.com/iedsafe/Client/drv/aceos/df-launcher.7z && \
+    setfattr -n user.component -v "bazzite-games" /usr/share/bazzite/games/df-launcher.7z && \
     curl --retry 3 -L -o /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz https://repo.steampowered.com/steamrt3/images/latest-container-runtime-public-beta/SteamLinuxRuntime_sniper.tar.xz && \
+
+
     /ctx/ghcurl "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-28/GE-Proton10-28.tar.gz" -Lo /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
     setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz && \
     setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
@@ -583,9 +588,10 @@ RUN --mount=type=cache,dst=/var/cache \
     ln -sf /usr/bin/true /usr/bin/pulseaudio && \
     mkdir -p /etc/flatpak/remotes.d && \
     curl --retry 3 -Lo /etc/flatpak/remotes.d/flathub.flatpakrepo https://dl.flathub.org/repo/flathub.flatpakrepo && \
-    if [ -f /usr/libexec/bazzite-mount-ntfs-exfat ]; then \
-        chmod +x /usr/libexec/bazzite-mount-ntfs-exfat; \
+    if [ -f /usr/libexec/bazzite-boot-setup ]; then \
+        chmod +x /usr/libexec/bazzite-boot-setup; \
     fi && \
+
     if [ -f /usr/libexec/bazzite-umu-offline-setup ]; then \
         chmod +x /usr/libexec/bazzite-umu-offline-setup; \
     fi && \
@@ -594,7 +600,8 @@ RUN --mount=type=cache,dst=/var/cache \
     systemctl disable scx_loader.service || true && \
     systemctl enable input-remapper.service || true && \
     systemctl enable bazzite-flatpak-manager.service || true && \
-    systemctl enable bazzite-mount-ntfs-exfat.service || true && \
+    systemctl enable bazzite-boot-setup.service || true && \
+
     systemctl enable bazzite-umu-offline-setup.service || true && \
     systemctl disable rpm-ostreed-automatic.timer || true && \
     systemctl enable uupd.timer || true && \

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Bazzite boot setup tasks
+Wants=systemd-udev-settle.service bazzite-umu-offline-setup.service
+After=local-fs.target systemd-udev-settle.service bazzite-umu-offline-setup.service
+ConditionPathExists=/usr/libexec/bazzite-boot-setup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bazzite-boot-setup
+
+[Install]
+WantedBy=multi-user.target
