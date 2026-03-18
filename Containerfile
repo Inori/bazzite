@@ -595,7 +595,21 @@ RUN --mount=type=cache,dst=/var/cache \
     if [ -f /usr/libexec/bazzite-umu-offline-setup ]; then \
         chmod +x /usr/libexec/bazzite-umu-offline-setup; \
     fi && \
+    if [ -f /usr/libexec/bazzite-autologin ]; then \
+        chmod +x /usr/libexec/bazzite-autologin; \
+    fi && \
+    if [ -f /usr/libexec/bazzite-require-password-for-sudo ]; then \
+        chmod +x /usr/libexec/bazzite-require-password-for-sudo; \
+    fi && \
+    if [ -f /etc/pam.d/sudo ] && [ -f /usr/libexec/bazzite-require-password-for-sudo ]; then \
+        grep -Fqx 'auth       requisite     pam_exec.so quiet stdout /usr/libexec/bazzite-require-password-for-sudo' /etc/pam.d/sudo || { \
+            printf '%s\n' 'auth       requisite     pam_exec.so quiet stdout /usr/libexec/bazzite-require-password-for-sudo' | cat - /etc/pam.d/sudo > /etc/pam.d/sudo.bazzite && \
+            mv /etc/pam.d/sudo.bazzite /etc/pam.d/sudo; \
+        }; \
+    fi && \
+
     systemctl enable brew-setup.service || true && \
+
     systemctl disable fw-fanctrl.service || true && \
     systemctl disable scx_loader.service || true && \
     systemctl enable input-remapper.service || true && \

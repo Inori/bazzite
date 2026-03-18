@@ -193,7 +193,14 @@ cat <<EOF >>/usr/share/anaconda/post-scripts/install-configure-upgrade.ks
 
 # DELETEME: This is a nasty hack. Remove whenever http://github.com/bootc-dev/bootc/commit/f7b41cc1ebfc823e9de848b55773faddc59ecf88 makes it into a release
 sed -i 's|container-image-reference=.*|container-image-reference=ostree-image-signed:docker://$imageref:$imagetag|' /ostree/deploy/default/deploy/*.origin
+
+PRIMARY_USER="$(awk -F: '$3 == 1000 { print $1; exit }' /etc/passwd || true)"
+if [[ -n "$PRIMARY_USER" ]]; then
+    passwd -d "$PRIMARY_USER" || true
+fi
+passwd -l root || true
 %end
+
 EOF
 
 # Enroll Secureboot Key
