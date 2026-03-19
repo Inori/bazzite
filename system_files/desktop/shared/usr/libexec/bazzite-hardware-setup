@@ -4,9 +4,10 @@ IMAGE_INFO="/usr/share/ublue-os/image-info.json"
 IMAGE_NAME=$(jq -r '."image-name"' < $IMAGE_INFO)
 IMAGE_BRANCH=$(jq -r '."image-branch"' < $IMAGE_INFO)
 FEDORA_VERSION=$(jq -r '."fedora-version"' < $IMAGE_INFO)
+BASE_IMAGE_NAME=$(jq -r '."base-image-name"' < $IMAGE_INFO)
 
 # SCRIPT VERSION
-HWS_VER=68
+HWS_VER=69
 HWS_VER_FILE="/etc/bazzite/hws_version"
 HWS_VER_RAN=$(cat $HWS_VER_FILE)
 
@@ -39,8 +40,78 @@ NEEDED_KARGS=()
 # Add directory for fixups
 mkdir -p /etc/bazzite/fixups
 
+STEAMOS_FIRSTBOOT_FIXUP="/etc/bazzite/fixups/steamos_passwordless_firstboot"
+STEAMOS_SUDO_PAM_FILE="/etc/pam.d/sudo"
+STEAMOS_SUDO_PAM_LINE="auth       requisite     pam_exec.so quiet stdout /usr/libexec/bazzite-require-password-for-sudo"
+
+resolve_primary_user() {
+  awk -F: '$3 == 1000 { print $1; exit }' /etc/passwd || true
+}
+
+apply_steamos_firstboot_defaults() {
+  local primary_user primary_home tmp_file
+
+  [[ "$IMAGE_NAME" == "bazzite-nvidia-open" ]] || return 0
+
+  if [[ -f "$STEAMOS_FIRSTBOOT_FIXUP" ]]; then
+    echo "SteamOS-style firstboot defaults already applied, skipping"
+    return 0
+  fi
+
+  primary_user="$(resolve_primary_user)"
+  if [[ -z "$primary_user" ]]; then
+    echo "No UID 1000 user found, skipping SteamOS-style firstboot defaults"
+    return 0
+  fi
+
+  primary_home="$(getent passwd "$primary_user" | cut -d: -f6 || true)"
+  if [[ -z "$primary_home" ]]; then
+    echo "Unable to resolve home directory for ${primary_user}, skipping SteamOS-style firstboot defaults"
+    return 0
+  fi
+
+  if [[ -x /usr/libexec/bazzite-autologin ]]; then
+    /usr/libexec/bazzite-autologin || true
+  fi
+
+  install -d /etc/xdg
+  cat > /etc/xdg/kscreenlockerrc <<'EOF'
+[Daemon]
+Autolock=false
+LockOnResume=false
+Timeout=0
+EOF
+
+  install -d -o "$primary_user" -g "$primary_user" "$primary_home/.config"
+  cat > "$primary_home/.config/kscreenlockerrc" <<'EOF'
+[Daemon]
+Autolock=false
+LockOnResume=false
+Timeout=0
+EOF
+  chown "$primary_user:$primary_user" "$primary_home/.config/kscreenlockerrc"
+
+  if [[ -f "$STEAMOS_SUDO_PAM_FILE" && -x /usr/libexec/bazzite-require-password-for-sudo ]] && \
+     ! grep -Fqx "$STEAMOS_SUDO_PAM_LINE" "$STEAMOS_SUDO_PAM_FILE"; then
+    tmp_file="$(mktemp)"
+    {
+      printf '%s\n' "$STEAMOS_SUDO_PAM_LINE"
+      cat "$STEAMOS_SUDO_PAM_FILE"
+    } > "$tmp_file"
+    cat "$tmp_file" > "$STEAMOS_SUDO_PAM_FILE"
+    rm -f "$tmp_file"
+  fi
+
+  passwd -d "$primary_user" || true
+  passwd -l root || true
+
+  touch "$STEAMOS_FIRSTBOOT_FIXUP"
+  echo "Applied SteamOS-style firstboot defaults for ${primary_user}"
+}
+
 # KERNEL ARGUMENTS
 echo "Current kargs: $KARGS"
+
 
 if /usr/libexec/hwsupport/valve-hardware || [[ ":83N0:83N1:83E1:ROG Ally RC71L:ROG Ally X RC72LA:" =~ ":$SYS_ID:" ]]; then
   echo "Checking for needed IOMMU change."
@@ -289,7 +360,10 @@ if [ ! -f /etc/bazzite/fixups/hhd_service_cleanup ]; then
   touch /etc/bazzite/fixups/hhd_service_cleanup
 fi
 
+apply_steamos_firstboot_defaults
+
 if [[ -n "$NEEDED_KARGS" ]]; then
+
   echo "Found needed karg changes, applying the following: ${NEEDED_KARGS[*]}"
   plymouth display-message --text="Preparing System - Please wait, this may take a while" || true
   rpm-ostree kargs ${NEEDED_KARGS[*]} || exit 1
