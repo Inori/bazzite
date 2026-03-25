@@ -352,11 +352,14 @@ RUN --mount=type=cache,dst=/var/cache \
     setfattr -n user.component -v "winetricks" /usr/bin/winetricks && \
     mkdir -p /usr/share/bazzite/games /usr/share/umu-offline-cache && \
     curl --retry 3 -L -o /usr/share/bazzite/games/df-launcher.7z https://coscdnsintl-1251626029.cos.ap-hongkong.myqcloud.com/iedsafe/Client/drv/aceos/df-launcher.7z && \
+    curl --retry 3 -L -o /usr/share/bazzite/games/DeltaForceClient-Win64-ShippingEngine.dll https://coscdnsintl-1251626029.cos.ap-hongkong.myqcloud.com/iedsafe/Client/drv/aceos/DeltaForceClient-Win64-ShippingEngine.dll && \
     setfattr -n user.component -v "bazzite-games" /usr/share/bazzite/games/df-launcher.7z && \
+    setfattr -n user.component -v "bazzite-games" /usr/share/bazzite/games/DeltaForceClient-Win64-ShippingEngine.dll && \
     curl --retry 3 -L -o /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz https://repo.steampowered.com/steamrt3/images/latest-container-runtime-public-beta/SteamLinuxRuntime_sniper.tar.xz && \
 
 
     /ctx/ghcurl "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-28/GE-Proton10-28.tar.gz" -Lo /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
+
     setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/SteamLinuxRuntime_sniper.tar.xz && \
     setfattr -n user.component -v "umu-offline-cache" /usr/share/umu-offline-cache/GE-Proton10-28.tar.gz && \
     /ctx/cleanup

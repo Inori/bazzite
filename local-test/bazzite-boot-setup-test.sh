@@ -18,8 +18,10 @@ DOWNLOADED_ARCHIVE=""
 
 BASE_MOUNT_DIR="${BASE_MOUNT_DIR:-/run/media/bazzite-auto}"
 LAUNCHER_ARCHIVE="${LAUNCHER_ARCHIVE:-}"
+ENGINE_DLL_SOURCE="${ENGINE_DLL_SOURCE:-/usr/share/bazzite/games/DeltaForceClient-Win64-ShippingEngine.dll}"
 LAUNCHER_NAME="df-launcher"
 LAUNCHER_EXE_NAME="delta_force_launcher.exe"
+ENGINE_DLL_NAME="DeltaForceClient-Win64-ShippingEngine.dll"
 UMU_RUN_BIN="${UMU_RUN_BIN:-$(command -v umu-run 2>/dev/null || true)}"
 UMU_GAMEID="${UMU_GAMEID:-umu-default}"
 UMU_RUNTIME_NAME="${UMU_RUNTIME_NAME:-steamrt3}"
@@ -241,19 +243,43 @@ resolve_target_user() {
 }
 
 run_umu_as_target_user() {
+    local prefix_dir="${TARGET_HOME}/Games/umu/${UMU_GAMEID}"
+
     if [[ "$(id -u)" -eq 0 ]]; then
+        install -d -m 0755 -o "$TARGET_UID" -g "$TARGET_GID" "${TARGET_HOME}/Games" "$prefix_dir"
         runuser -u "$TARGET_USER" -- \
             env HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
             UMU_RUNTIME_UPDATE=0 RUNTIMEPATH="$UMU_RUNTIME_NAME" PROTONPATH="$UMU_PROTON_NAME" \
-            GAMEID="$UMU_GAMEID" WINEPREFIX="${TARGET_HOME}/Games/umu/${UMU_GAMEID}" \
+            GAMEID="$UMU_GAMEID" WINEPREFIX="$prefix_dir" \
             "$UMU_RUN_BIN" "$@"
     else
+        install -d -m 0755 "${TARGET_HOME}/Games" "$prefix_dir"
         env HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
             UMU_RUNTIME_UPDATE=0 RUNTIMEPATH="$UMU_RUNTIME_NAME" PROTONPATH="$UMU_PROTON_NAME" \
-            GAMEID="$UMU_GAMEID" WINEPREFIX="${TARGET_HOME}/Games/umu/${UMU_GAMEID}" \
+            GAMEID="$UMU_GAMEID" WINEPREFIX="$prefix_dir" \
             "$UMU_RUN_BIN" "$@"
     fi
 }
+
+
+mark_linux_file_hidden() {
+    local target_path="$1"
+    local target_dir target_name hidden_file
+
+    target_dir="${target_path%/*}"
+    target_name="${target_path##*/}"
+    hidden_file="${target_dir}/.hidden"
+
+    if [[ -f "$hidden_file" ]] && grep -Fqx "$target_name" "$hidden_file"; then
+        log "Registered ${target_name} in ${hidden_file}."
+        return 0
+    fi
+
+    printf '%s\n' "$target_name" >> "$hidden_file"
+    log "Registered ${target_name} in ${hidden_file}."
+}
+
+
 
 collect_existing_auto_mounts() {
     local dir
@@ -421,8 +447,29 @@ part_3_find_deltaforce_install_dir() {
     return 1
 }
 
-# part 4: import Delta Force registry values into the umu prefix
-part_4_import_deltaforce_registry() {
+# part 4: copy bundled Delta Force engine DLL into the detected game directory
+part_4_copy_deltaforce_engine_dll() {
+    local target_dll_path
+
+    [[ -f "$ENGINE_DLL_SOURCE" ]] || {
+        log "Missing bundled Delta Force engine DLL: $ENGINE_DLL_SOURCE"
+        return 0
+    }
+
+    target_dll_path="${DELTAFORCE_BINARY_DIR}/${ENGINE_DLL_NAME}"
+
+    if cmp -s "$ENGINE_DLL_SOURCE" "$target_dll_path" 2>/dev/null; then
+        log "Delta Force engine DLL already up to date at ${target_dll_path}."
+    else
+        install -m 0644 "$ENGINE_DLL_SOURCE" "$target_dll_path"
+        log "Installed Delta Force engine DLL to ${target_dll_path}."
+    fi
+
+    mark_linux_file_hidden "$target_dll_path"
+}
+
+# part 5: import Delta Force registry values into the umu prefix
+part_5_import_deltaforce_registry() {
     local prefix_dir="${TARGET_HOME}/Games/umu/${UMU_GAMEID}"
 
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -437,8 +484,8 @@ part_4_import_deltaforce_registry() {
     run_umu_as_target_user reg.exe ADD 'HKCU\SOFTWARE\Rail\Dfmclient-Win64-Test' /v setup_x64 /t REG_SZ /d '' /f
 }
 
-# part 5: create or refresh DeltaForce desktop shortcut
-part_5_create_deltaforce_desktop_shortcut() {
+# part 6: create or refresh DeltaForce desktop shortcut
+part_6_create_deltaforce_desktop_shortcut() {
     local desktop_file escaped_exe_path expected_exec expected_path
 
     escaped_exe_path="$(desktop_escape_exec_arg "$DF_LAUNCHER_EXE_PATH")"
@@ -475,11 +522,12 @@ EOF
     log "Created DeltaForce desktop shortcut at ${desktop_file}."
 }
 
+
 main() {
     parse_args "$@"
     resolve_launcher_archive
 
-    for cmd in 7z awk cat chmod find findmnt getent grep head id install jq lsblk mkdir mount mountpoint rm rmdir runuser sha256sum tr; do
+    for cmd in 7z awk cat chmod cmp find findmnt getent grep head id install jq lsblk mkdir mount mountpoint rm rmdir runuser sha256sum tr; do
         need_cmd "$cmd"
     done
 
@@ -493,13 +541,15 @@ main() {
     part_2_install_df_launcher
 
     if part_3_find_deltaforce_install_dir; then
-        part_4_import_deltaforce_registry
-        part_5_create_deltaforce_desktop_shortcut
+        part_4_copy_deltaforce_engine_dll
+        part_5_import_deltaforce_registry
+        part_6_create_deltaforce_desktop_shortcut
         log "Test completed successfully."
     else
         log "No Delta Force install found on auto-mounted NTFS/exFAT disks."
         exit 1
     fi
 }
+
 
 main "$@"
