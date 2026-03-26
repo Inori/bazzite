@@ -157,8 +157,8 @@ jobs:
           echo "push_registry=${PUSH_REGISTRY}" >> $GITHUB_OUTPUT
           echo "pull_registry=${PULL_REGISTRY}" >> $GITHUB_OUTPUT
           echo "output_image=${PUSH_REGISTRY}/${{ matrix.image }}" >> $GITHUB_OUTPUT
-          # Pinned base image to known working digest from successful build log
-          BASE_IMAGE="${PULL_REGISTRY}/$BASE_IMAGE_NAME-${{ matrix.base_image_flavor }}:${{ matrix.fedora_version }}@sha256:06660428ca6aff2e9b6b3f743cb00a1746382a8177ab6d3c3ad3acaf11b4bb90"
+          # Base image using regular tag as digest pinning failed
+          BASE_IMAGE="${PULL_REGISTRY}/$BASE_IMAGE_NAME-${{ matrix.base_image_flavor }}:${{ matrix.fedora_version }}"
           echo "base_image=${BASE_IMAGE}" >> $GITHUB_OUTPUT
 
           if [ "${{ inputs['fresh-rechunk'] }}" == "true" ]; then
