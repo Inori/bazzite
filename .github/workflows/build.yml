@@ -157,7 +157,8 @@ jobs:
           echo "push_registry=${PUSH_REGISTRY}" >> $GITHUB_OUTPUT
           echo "pull_registry=${PULL_REGISTRY}" >> $GITHUB_OUTPUT
           echo "output_image=${PUSH_REGISTRY}/${{ matrix.image }}" >> $GITHUB_OUTPUT
-          BASE_IMAGE="${PULL_REGISTRY}/$BASE_IMAGE_NAME-${{ matrix.base_image_flavor }}:${{ matrix.fedora_version }}"
+          # Pinned base image to known working digest from successful build log
+          BASE_IMAGE="${PULL_REGISTRY}/$BASE_IMAGE_NAME-${{ matrix.base_image_flavor }}:${{ matrix.fedora_version }}@sha256:06660428ca6aff2e9b6b3f743cb00a1746382a8177ab6d3c3ad3acaf11b4bb90"
           echo "base_image=${BASE_IMAGE}" >> $GITHUB_OUTPUT
 
           if [ "${{ inputs['fresh-rechunk'] }}" == "true" ]; then
@@ -168,7 +169,8 @@ jobs:
           fi
           echo "prev_ref=${IMAGEREF}" >> $GITHUB_OUTPUT
 
-          KERNEL_URI=ghcr.io/bazzite-org/kernel-bazzite:${{ matrix.kernel_version }}-f${{ matrix.fedora_version }}-${{ matrix.arch }}
+          # Pinned kernel and nvidia drivers to known working digests
+          KERNEL_URI=ghcr.io/bazzite-org/kernel-bazzite:${{ matrix.kernel_version }}-f${{ matrix.fedora_version }}-${{ matrix.arch }}@sha256:812f1c08566e99f422a5834b944b997ee3ff0be4bc8d7e28f7d2261cae5c45d8
           echo "kernel_ref=${KERNEL_URI}" >> $GITHUB_OUTPUT
           NVIDIA_URI=ghcr.io/bazzite-org/nvidia-drivers
           echo "nvidia_ref=${NVIDIA_URI}" >> $GITHUB_OUTPUT
@@ -251,7 +253,7 @@ jobs:
           if [ "${{ steps.base.outputs.install_nvidia }}" == "true" ]; then
             sudo skopeo inspect docker://${{ steps.base.outputs.kernel_ref }} > kernel_source.json
             NVIDIA_VERSION=$(jq -r '.Labels["${{ steps.base.outputs.nvidia_version }}"]' kernel_source.json)
-            NVIDIA_REF="${{ steps.base.outputs.nvidia_ref }}:${NVIDIA_VERSION}-f${{ matrix.fedora_version }}-${{ matrix.arch }}"
+            NVIDIA_REF="${{ steps.base.outputs.nvidia_ref }}:${NVIDIA_VERSION}-f${{ matrix.fedora_version }}-${{ matrix.arch }}@sha256:1057ea66e890b1c527afa411d1479d811606c9465c283bf451a5f89d409eb60a"
             # Same as above, we verify the uri moments before we pull it
             gh attestation verify -R bazzite-org/nvidia-drivers \
               "oci://$NVIDIA_REF" --deny-self-hosted-runners --source-ref "refs/heads/master"
